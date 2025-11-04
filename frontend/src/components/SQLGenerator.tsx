@@ -75,6 +75,7 @@ export default function SQLGenerator() {
   const [businessLogic, setBusinessLogic] = useState('')
 
   const [generatedSQL, setGeneratedSQL] = useState('')
+  const [sqlExplanation, setSqlExplanation] = useState('')
   const [sqlResults, setSqlResults] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -219,6 +220,7 @@ export default function SQLGenerator() {
     setSelectedColumns([])
     setBusinessLogic('')
     setGeneratedSQL('')
+    setSqlExplanation('')
     setSqlResults(null)
     setError(null)
     setSchemas([])
@@ -276,6 +278,7 @@ export default function SQLGenerator() {
     setLoading(true)
     setError(null)
     setGeneratedSQL('')
+    setSqlExplanation('')
     setSqlResults(null)
 
     try {
@@ -295,6 +298,7 @@ export default function SQLGenerator() {
       const data = await response.json()
       if (response.ok) {
         setGeneratedSQL(data.sql_query)
+        setSqlExplanation(data.explanation || '')
       } else {
         setError(data.detail || 'Failed to generate SQL')
       }
@@ -694,6 +698,14 @@ export default function SQLGenerator() {
                 <CodeIcon fontSize="small" /> 3. Generated SQL Query
               </Typography>
 
+              {sqlExplanation && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {sqlExplanation}
+                  </Typography>
+                </Alert>
+              )}
+
               <Box
                 component="pre"
                 sx={{
@@ -726,13 +738,22 @@ export default function SQLGenerator() {
         )}
       </AnimatePresence>
 
-      {/* Debug: Show SQL Results State */}
+      {/* Debug: Show SQL Results State - Collapsible */}
       {sqlResults && (
-        <Box sx={{ p: 2, mb: 2, bgcolor: '#e3f2fd', border: '1px solid #2196f3', borderRadius: 1 }}>
-          <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-            DEBUG: sqlResults = {JSON.stringify(sqlResults, null, 2)}
-          </Typography>
-        </Box>
+        <Accordion sx={{ mb: 2 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+              Debug Output
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box sx={{ p: 2, bgcolor: '#e3f2fd', border: '1px solid #2196f3', borderRadius: 1 }}>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                {JSON.stringify(sqlResults, null, 2)}
+              </Typography>
+            </Box>
+          </AccordionDetails>
+        </Accordion>
       )}
 
       <AnimatePresence>

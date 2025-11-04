@@ -372,18 +372,24 @@ async def suggest_business_logic(request: BusinessLogicSuggestionRequest):
         """
 
         # Create prompt for business logic suggestions
-        system_prompt = """You are a helpful data analyst assistant. Generate 3-5 different business logic examples that could be useful for analyzing the given table and columns.
-        Each suggestion should be a clear, concise business question or analytical task.
-        Return ONLY a JSON array of strings, nothing else."""
+        system_prompt = """You are a helpful data analyst assistant specializing in business intelligence and data analysis.
+Generate diverse, comprehensive business logic examples that demonstrate different types of analytical queries.
+Each suggestion should be a clear business question that leverages multiple columns from the dataset.
+Focus on realistic business scenarios including aggregations, filtering, grouping, and comparisons."""
 
         user_prompt = f"""Based on this table information:
 
 {table_context}
 
-Generate 3-5 different business logic examples that would be useful for this data.
-Examples should be realistic analytical questions.
+Generate 5 diverse business logic examples for analyzing this data. Each suggestion should:
+- Be a clear, natural language business question
+- Use multiple relevant columns (not just one or two)
+- Represent different query types (aggregation, filtering, ranking, comparison, trends)
+- Be realistic and actionable for business users
+- Be 1-2 sentences maximum
 
-Return ONLY a JSON array of strings like: ["example 1", "example 2", "example 3"]"""
+Format your response as a simple numbered list (1. 2. 3. 4. 5.), with each suggestion on a new line.
+Do NOT use bullet points, quotes, or JSON format. Just natural language numbered sentences."""
 
         # Call Databricks Foundation Model
         response = client.chat.completions.create(
@@ -406,14 +412,32 @@ Return ONLY a JSON array of strings like: ["example 1", "example 2", "example 3"
         # Calculate cost
         estimated_cost = calculate_llm_cost(request.model_id, prompt_tokens, completion_tokens)
 
-        # Try to parse as JSON, fallback to simple list if needed
-        try:
-            import json
-            suggestions = json.loads(suggestions_text)
-        except:
-            # Fallback: split by newlines and clean up
-            suggestions = [s.strip('- ').strip() for s in suggestions_text.split('\n') if s.strip() and not s.strip().startswith('[') and not s.strip().endswith(']')]
-            suggestions = [s for s in suggestions if len(s) > 10][:5]
+        # Parse numbered list format (1. 2. 3. etc.)
+        import re
+        suggestions = []
+        lines = suggestions_text.split('\n')
+        for line in lines:
+            # Match lines that start with number and period (e.g., "1. ", "2. ")
+            match = re.match(r'^\d+\.\s*(.+)$', line.strip())
+            if match:
+                suggestion = match.group(1).strip()
+                # Remove any surrounding quotes
+                suggestion = suggestion.strip('"').strip("'")
+                if len(suggestion) > 15:  # Must be substantial
+                    suggestions.append(suggestion)
+
+        # Fallback if regex parsing fails: try JSON or simple cleanup
+        if not suggestions:
+            try:
+                import json
+                suggestions = json.loads(suggestions_text)
+            except:
+                # Simple fallback: split by newlines and clean up
+                suggestions = [s.strip('- ').strip().strip('"').strip("'") for s in suggestions_text.split('\n') if s.strip()]
+                suggestions = [s for s in suggestions if len(s) > 15][:5]
+
+        # Limit to 5 suggestions
+        suggestions = suggestions[:5]
 
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
@@ -477,35 +501,48 @@ async def generate_sql(request: SQLGenerationRequest):
         """
 
         # Create prompt for SQL generation
-        system_prompt = """You are an expert Databricks SQL query generator. Generate clean, efficient SQL queries using ONLY Databricks/Spark SQL syntax.
+        system_prompt = """You are an expert Databricks SQL query generator specializing in comprehensive data analysis.
+Generate clean, efficient SQL queries using ONLY Databricks/Spark SQL syntax.
 
 CRITICAL SYNTAX RULES:
 - Use ONLY Databricks/Spark SQL syntax (NOT Oracle, SQL Server, or PostgreSQL-specific syntax)
 - Do NOT use: KEEP, DENSE_RANK with KEEP, TOP N, LIMIT with OFFSET (use LIMIT only)
 - For finding row with MAX/MIN value, use window functions (ROW_NUMBER() OVER) or correlated subqueries
-- Use standard functions: ROUND(), COALESCE(), CASE WHEN, etc.
+- Use standard functions: ROUND(), COALESCE(), CASE WHEN, CAST, etc.
 - Use GROUP BY, ORDER BY, HAVING, JOIN as needed
 - Always qualify column names with table/alias when using JOINs
 
-Return ONLY the SQL query without any explanation or markdown formatting."""
+QUERY QUALITY REQUIREMENTS:
+- Use as many relevant columns as possible from the available set
+- Include appropriate column aliases for clarity
+- Use proper formatting with clear indentation
+- Apply relevant filters, aggregations, and ordering
+- Consider edge cases (NULL values, empty results)"""
 
-        user_prompt = f"""Generate a Databricks SQL query for the following:
+        user_prompt = f"""Generate a comprehensive Databricks SQL query for the following:
 
 {table_context}
 
 Business Logic:
 {request.business_logic}
 
-IMPORTANT CONSTRAINTS:
+IMPORTANT GUIDELINES:
 1. Use ONLY Databricks/Spark SQL syntax
-2. Do NOT use Oracle syntax like KEEP, FIRST_VALUE with KEEP, or DENSE_RANK with KEEP
-3. For finding values with MAX/MIN criteria, use window functions like:
+2. Do NOT use Oracle syntax (KEEP, FIRST_VALUE with KEEP, DENSE_RANK with KEEP)
+3. For finding values with MAX/MIN criteria, use window functions:
    - ROW_NUMBER() OVER (PARTITION BY x ORDER BY y DESC)
    - Or use a subquery with MAX/MIN
-4. Test your query mentally to ensure it's valid Databricks SQL
+4. Include as many relevant columns as makes sense for the business logic
+5. Use proper column aliases for calculated fields
+6. Handle NULL values appropriately with COALESCE or filtering
+7. Include appropriate WHERE, GROUP BY, ORDER BY clauses as needed
+8. Format the query clearly with proper line breaks
 
-Generate a SELECT query that addresses this business logic using the specified columns.
-Return ONLY the SQL query, nothing else."""
+Generate a comprehensive SELECT query that fully addresses the business logic.
+
+Return your response in this EXACT format:
+EXPLANATION: [A brief 1-2 sentence plain English explanation of what the query does and why]
+SQL: [The complete, well-formatted SQL query here]"""
 
         # Call Databricks Foundation Model
         response = client.chat.completions.create(
@@ -518,8 +555,23 @@ Return ONLY the SQL query, nothing else."""
             temperature=0.3
         )
 
-        sql_query = response.choices[0].message.content.strip()
-        # Remove markdown code blocks if present
+        llm_response = response.choices[0].message.content.strip()
+
+        # Parse EXPLANATION and SQL from the response
+        explanation = ""
+        sql_query = ""
+
+        if "EXPLANATION:" in llm_response and "SQL:" in llm_response:
+            # Split by SQL: to get both parts
+            parts = llm_response.split("SQL:", 1)
+            explanation = parts[0].replace("EXPLANATION:", "").strip()
+            sql_query = parts[1].strip()
+        else:
+            # Fallback if LLM doesn't follow format
+            sql_query = llm_response
+            explanation = "No explanation provided."
+
+        # Remove markdown code blocks if present in SQL
         sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
 
         # Extract token usage from response
@@ -553,6 +605,7 @@ Return ONLY the SQL query, nothing else."""
 
         return {
             "sql_query": sql_query,
+            "explanation": explanation,
             "model_used": request.model_id
         }
     except Exception as e:
