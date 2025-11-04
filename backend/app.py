@@ -629,54 +629,84 @@ async def get_dashboard_statistics():
         ) as connection:
             with connection.cursor() as cursor:
                 # Total query executions
-                cursor.execute("""
-                    SELECT COALESCE(COUNT(*), 0) as total_executions
-                    FROM arao.text_to_sql.audit_logs
-                    WHERE event_type = 'sql_execution'
-                """)
-                total_executions = cursor.fetchone()[0] or 0
+                try:
+                    cursor.execute("""
+                        SELECT COALESCE(COUNT(*), 0) as total_executions
+                        FROM arao.text_to_sql.audit_logs
+                        WHERE event_type = 'sql_execution'
+                    """)
+                    total_executions = cursor.fetchone()[0] or 0
+                    logger.info(f"Dashboard stats - total_executions: {total_executions}")
+                except Exception as e:
+                    logger.error(f"Failed to get total_executions: {str(e)}", exc_info=True)
+                    total_executions = 0
 
                 # Total LLM calls (business logic + SQL generation)
-                cursor.execute("""
-                    SELECT COALESCE(COUNT(*), 0) as total_llm_calls
-                    FROM arao.text_to_sql.audit_logs
-                    WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
-                """)
-                total_llm_calls = cursor.fetchone()[0] or 0
+                try:
+                    cursor.execute("""
+                        SELECT COALESCE(COUNT(*), 0) as total_llm_calls
+                        FROM arao.text_to_sql.audit_logs
+                        WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
+                    """)
+                    total_llm_calls = cursor.fetchone()[0] or 0
+                    logger.info(f"Dashboard stats - total_llm_calls: {total_llm_calls}")
+                except Exception as e:
+                    logger.error(f"Failed to get total_llm_calls: {str(e)}", exc_info=True)
+                    total_llm_calls = 0
 
                 # Average execution time for SQL queries
-                cursor.execute("""
-                    SELECT COALESCE(AVG(execution_time_ms), 0) as avg_execution_time
-                    FROM arao.text_to_sql.audit_logs
-                    WHERE event_type = 'sql_execution' AND status = 'success'
-                """)
-                avg_execution_time = cursor.fetchone()[0] or 0
+                try:
+                    cursor.execute("""
+                        SELECT COALESCE(AVG(execution_time_ms), 0) as avg_execution_time
+                        FROM arao.text_to_sql.audit_logs
+                        WHERE event_type = 'sql_execution' AND status = 'success'
+                    """)
+                    avg_execution_time = cursor.fetchone()[0] or 0
+                    logger.info(f"Dashboard stats - avg_execution_time: {avg_execution_time}")
+                except Exception as e:
+                    logger.error(f"Failed to get avg_execution_time: {str(e)}", exc_info=True)
+                    avg_execution_time = 0
 
                 # Success rate
-                cursor.execute("""
-                    SELECT COALESCE(
-                        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0),
-                        0
-                    ) as success_rate
-                    FROM arao.text_to_sql.audit_logs
-                """)
-                success_rate = cursor.fetchone()[0] or 0
+                try:
+                    cursor.execute("""
+                        SELECT COALESCE(
+                            SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0),
+                            0
+                        ) as success_rate
+                        FROM arao.text_to_sql.audit_logs
+                    """)
+                    success_rate = cursor.fetchone()[0] or 0
+                    logger.info(f"Dashboard stats - success_rate: {success_rate}")
+                except Exception as e:
+                    logger.error(f"Failed to get success_rate: {str(e)}", exc_info=True)
+                    success_rate = 0
 
                 # Total rows returned
-                cursor.execute("""
-                    SELECT COALESCE(SUM(row_count), 0) as total_rows
-                    FROM arao.text_to_sql.audit_logs
-                    WHERE event_type = 'sql_execution' AND status = 'success'
-                """)
-                total_rows = cursor.fetchone()[0] or 0
+                try:
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(row_count), 0) as total_rows
+                        FROM arao.text_to_sql.audit_logs
+                        WHERE event_type = 'sql_execution' AND status = 'success'
+                    """)
+                    total_rows = cursor.fetchone()[0] or 0
+                    logger.info(f"Dashboard stats - total_rows: {total_rows}")
+                except Exception as e:
+                    logger.error(f"Failed to get total_rows: {str(e)}", exc_info=True)
+                    total_rows = 0
 
                 # Unique tables analyzed
-                cursor.execute("""
-                    SELECT COALESCE(COUNT(DISTINCT table_name), 0) as unique_tables
-                    FROM arao.text_to_sql.audit_logs
-                    WHERE table_name IS NOT NULL
-                """)
-                unique_tables = cursor.fetchone()[0] or 0
+                try:
+                    cursor.execute("""
+                        SELECT COALESCE(COUNT(DISTINCT table_name), 0) as unique_tables
+                        FROM arao.text_to_sql.audit_logs
+                        WHERE table_name IS NOT NULL
+                    """)
+                    unique_tables = cursor.fetchone()[0] or 0
+                    logger.info(f"Dashboard stats - unique_tables: {unique_tables}")
+                except Exception as e:
+                    logger.error(f"Failed to get unique_tables: {str(e)}", exc_info=True)
+                    unique_tables = 0
 
                 return {
                     "total_executions": int(total_executions) if total_executions is not None else 0,
