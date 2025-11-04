@@ -620,7 +620,7 @@ async def execute_sql(request: SQLExecutionRequest):
 
 @app.get("/api/dashboard-statistics")
 async def get_dashboard_statistics():
-    """Get dashboard statistics from audit logs"""
+    """Get dashboard statistics from audit logs - using SELECT * approach like query-history"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
@@ -628,113 +628,60 @@ async def get_dashboard_statistics():
             access_token=DATABRICKS_TOKEN
         ) as connection:
             with connection.cursor() as cursor:
-                # Total query executions
-                try:
-                    cursor.execute("""
-                        SELECT COUNT(*) as total_executions
-                        FROM arao.text_to_sql.audit_logs
-                        WHERE event_type = 'sql_execution'
-                    """)
-                    # Iterate cursor to bypass pandas conversion
-                    result = None
-                    for row in cursor:
-                        result = row
-                        break
-                    total_executions = int(result[0]) if result and result[0] is not None else 0
-                    logger.info(f"Dashboard stats - total_executions: {total_executions}")
-                except Exception as e:
-                    logger.error(f"Failed to get total_executions: {str(e)}", exc_info=True)
-                    total_executions = 0
+                # Fetch ALL audit log records and aggregate in Python
+                # This avoids the pandas/Arrow conversion issues with SQL aggregates
+                cursor.execute("""
+                    SELECT
+                        event_type,
+                        execution_time_ms,
+                        row_count,
+                        status,
+                        table_name
+                    FROM arao.text_to_sql.audit_logs
+                """)
 
-                # Total LLM calls (business logic + SQL generation)
-                try:
-                    cursor.execute("""
-                        SELECT COUNT(*) as total_llm_calls
-                        FROM arao.text_to_sql.audit_logs
-                        WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
-                    """)
-                    # Iterate cursor to bypass pandas conversion
-                    result = None
-                    for row in cursor:
-                        result = row
-                        break
-                    total_llm_calls = int(result[0]) if result and result[0] is not None else 0
-                    logger.info(f"Dashboard stats - total_llm_calls: {total_llm_calls}")
-                except Exception as e:
-                    logger.error(f"Failed to get total_llm_calls: {str(e)}", exc_info=True)
-                    total_llm_calls = 0
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
 
-                # Average execution time for SQL queries
-                try:
-                    cursor.execute("""
-                        SELECT COALESCE(AVG(execution_time_ms), 0) as avg_execution_time
-                        FROM arao.text_to_sql.audit_logs
-                        WHERE event_type = 'sql_execution' AND status = 'success'
-                    """)
-                    avg_execution_time = cursor.fetchone()[0] or 0
-                    logger.info(f"Dashboard stats - avg_execution_time: {avg_execution_time}")
-                except Exception as e:
-                    logger.error(f"Failed to get avg_execution_time: {str(e)}", exc_info=True)
-                    avg_execution_time = 0
+                # Convert to list of dicts
+                records = [dict(zip(columns, row)) for row in rows]
+
+                # Aggregate in Python
+                total_executions = sum(1 for r in records if r['event_type'] == 'sql_execution')
+                total_llm_calls = sum(1 for r in records if r['event_type'] in ('business_logic_suggestion', 'sql_generation'))
+
+                # Average execution time for SQL executions
+                sql_execution_times = [r['execution_time_ms'] for r in records
+                                      if r['event_type'] == 'sql_execution'
+                                      and r['status'] == 'success'
+                                      and r['execution_time_ms'] is not None]
+                avg_execution_time = int(sum(sql_execution_times) / len(sql_execution_times)) if sql_execution_times else 0
 
                 # Success rate
-                try:
-                    cursor.execute("""
-                        SELECT COALESCE(
-                            SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0),
-                            0
-                        ) as success_rate
-                        FROM arao.text_to_sql.audit_logs
-                    """)
-                    success_rate = cursor.fetchone()[0] or 0
-                    logger.info(f"Dashboard stats - success_rate: {success_rate}")
-                except Exception as e:
-                    logger.error(f"Failed to get success_rate: {str(e)}", exc_info=True)
-                    success_rate = 0
+                total_records = len(records)
+                successful_records = sum(1 for r in records if r['status'] == 'success')
+                success_rate = round((successful_records * 100.0 / total_records), 2) if total_records > 0 else 0.0
 
                 # Total rows returned
-                try:
-                    cursor.execute("""
-                        SELECT SUM(row_count) as total_rows
-                        FROM arao.text_to_sql.audit_logs
-                        WHERE event_type = 'sql_execution' AND status = 'success'
-                    """)
-                    # Iterate cursor to bypass pandas conversion
-                    result = None
-                    for row in cursor:
-                        result = row
-                        break
-                    total_rows = int(result[0]) if result and result[0] is not None else 0
-                    logger.info(f"Dashboard stats - total_rows: {total_rows}")
-                except Exception as e:
-                    logger.error(f"Failed to get total_rows: {str(e)}", exc_info=True)
-                    total_rows = 0
+                total_rows = sum(r['row_count'] for r in records
+                               if r['event_type'] == 'sql_execution'
+                               and r['status'] == 'success'
+                               and r['row_count'] is not None)
 
-                # Unique tables analyzed
-                try:
-                    cursor.execute("""
-                        SELECT COUNT(DISTINCT table_name) as unique_tables
-                        FROM arao.text_to_sql.audit_logs
-                        WHERE table_name IS NOT NULL
-                    """)
-                    # Iterate cursor to bypass pandas conversion
-                    result = None
-                    for row in cursor:
-                        result = row
-                        break
-                    unique_tables = int(result[0]) if result and result[0] is not None else 0
-                    logger.info(f"Dashboard stats - unique_tables: {unique_tables}")
-                except Exception as e:
-                    logger.error(f"Failed to get unique_tables: {str(e)}", exc_info=True)
-                    unique_tables = 0
+                # Unique tables
+                unique_tables = len(set(r['table_name'] for r in records if r['table_name'] is not None))
+
+                logger.info(f"Dashboard stats - total_executions: {total_executions}, total_llm_calls: {total_llm_calls}")
+                logger.info(f"Dashboard stats - avg_time: {avg_execution_time}, success_rate: {success_rate}")
+                logger.info(f"Dashboard stats - total_rows: {total_rows}, unique_tables: {unique_tables}")
 
                 return {
-                    "total_executions": int(total_executions) if total_executions is not None else 0,
-                    "total_llm_calls": int(total_llm_calls) if total_llm_calls is not None else 0,
-                    "avg_execution_time_ms": int(avg_execution_time) if avg_execution_time is not None else 0,
-                    "success_rate": round(float(success_rate), 2) if success_rate is not None else 0.0,
-                    "total_rows_returned": int(total_rows) if total_rows is not None else 0,
-                    "unique_tables_analyzed": int(unique_tables) if unique_tables is not None else 0
+                    "total_executions": total_executions,
+                    "total_llm_calls": total_llm_calls,
+                    "avg_execution_time_ms": avg_execution_time,
+                    "success_rate": success_rate,
+                    "total_rows_returned": total_rows,
+                    "unique_tables_analyzed": unique_tables
                 }
     except Exception as e:
         logger.error(f"Error fetching dashboard statistics: {str(e)}", exc_info=True)
