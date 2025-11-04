@@ -230,7 +230,7 @@ function App() {
                 •
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Built with React, FastAPI & Databricks
+                Built on Databricks
               </Typography>
             </Box>
           </Box>
