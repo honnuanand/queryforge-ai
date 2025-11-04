@@ -15,7 +15,7 @@ env:
   - name: DATABRICKS_HOST
     value: "https://fe-vm-leaps-fe.cloud.databricks.com"
   - name: DATABRICKS_TOKEN
-    value: "{{secrets/queryforge/databricks-token}}"
+    value: {{secrets/queryforge/databricks-token}}
   - name: DATABRICKS_CATALOG
     value: "arao"
   - name: DATABRICKS_SCHEMA
