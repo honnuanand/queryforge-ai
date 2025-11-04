@@ -15,7 +15,9 @@ env:
   - name: DATABRICKS_HOST
     value: "https://fe-vm-leaps-fe.cloud.databricks.com"
   - name: DATABRICKS_TOKEN
-    value: "REPLACE_WITH_YOUR_DATABRICKS_TOKEN"  # Set this in Databricks Apps UI
+    value_from:
+      secret_scope: queryforge
+      secret_key: databricks-token
   - name: DATABRICKS_CATALOG
     value: "arao"
   - name: DATABRICKS_SCHEMA
