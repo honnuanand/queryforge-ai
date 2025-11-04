@@ -477,15 +477,32 @@ async def generate_sql(request: SQLGenerationRequest):
         """
 
         # Create prompt for SQL generation
-        system_prompt = """You are an expert SQL query generator. Generate clean, efficient SQL queries based on the user's requirements.
-        Return ONLY the SQL query without any explanation or markdown formatting."""
+        system_prompt = """You are an expert Databricks SQL query generator. Generate clean, efficient SQL queries using ONLY Databricks/Spark SQL syntax.
 
-        user_prompt = f"""Generate a SQL query for the following:
+CRITICAL SYNTAX RULES:
+- Use ONLY Databricks/Spark SQL syntax (NOT Oracle, SQL Server, or PostgreSQL-specific syntax)
+- Do NOT use: KEEP, DENSE_RANK with KEEP, TOP N, LIMIT with OFFSET (use LIMIT only)
+- For finding row with MAX/MIN value, use window functions (ROW_NUMBER() OVER) or correlated subqueries
+- Use standard functions: ROUND(), COALESCE(), CASE WHEN, etc.
+- Use GROUP BY, ORDER BY, HAVING, JOIN as needed
+- Always qualify column names with table/alias when using JOINs
+
+Return ONLY the SQL query without any explanation or markdown formatting."""
+
+        user_prompt = f"""Generate a Databricks SQL query for the following:
 
 {table_context}
 
 Business Logic:
 {request.business_logic}
+
+IMPORTANT CONSTRAINTS:
+1. Use ONLY Databricks/Spark SQL syntax
+2. Do NOT use Oracle syntax like KEEP, FIRST_VALUE with KEEP, or DENSE_RANK with KEEP
+3. For finding values with MAX/MIN criteria, use window functions like:
+   - ROW_NUMBER() OVER (PARTITION BY x ORDER BY y DESC)
+   - Or use a subquery with MAX/MIN
+4. Test your query mentally to ensure it's valid Databricks SQL
 
 Generate a SELECT query that addresses this business logic using the specified columns.
 Return ONLY the SQL query, nothing else."""
