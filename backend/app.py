@@ -501,7 +501,7 @@ async def generate_sql(request: SQLGenerationRequest):
         """
 
         # Create prompt for SQL generation
-        system_prompt = """You are an expert Databricks SQL query generator specializing in comprehensive data analysis.
+        system_prompt = """You are an expert Databricks SQL query generator specializing in clear, executable data analysis queries.
 Generate clean, efficient SQL queries using ONLY Databricks/Spark SQL syntax.
 
 CRITICAL SYNTAX RULES:
@@ -513,13 +513,21 @@ CRITICAL SYNTAX RULES:
 - Always qualify column names with table/alias when using JOINs
 
 QUERY QUALITY REQUIREMENTS:
-- Use as many relevant columns as possible from the available set
+- Prefer focused, single-purpose queries over complex multi-CTE queries
+- Use CTEs (WITH clauses) sparingly - only when necessary for clarity
+- Use as many relevant columns as appropriate, but don't over-complicate
 - Include appropriate column aliases for clarity
 - Use proper formatting with clear indentation
 - Apply relevant filters, aggregations, and ordering
-- Consider edge cases (NULL values, empty results)"""
+- Consider edge cases (NULL values, empty results)
+- IMPORTANT: Keep queries concise and executable - avoid excessive nesting
 
-        user_prompt = f"""Generate a comprehensive Databricks SQL query for the following:
+QUERY LENGTH:
+- Aim for queries under 50 lines when possible
+- If using CTEs, limit to 2-3 CTEs maximum
+- Focus on answering the specific business question asked"""
+
+        user_prompt = f"""Generate a clear, focused Databricks SQL query for the following:
 
 {table_context}
 
@@ -527,22 +535,22 @@ Business Logic:
 {request.business_logic}
 
 IMPORTANT GUIDELINES:
-1. Use ONLY Databricks/Spark SQL syntax
-2. Do NOT use Oracle syntax (KEEP, FIRST_VALUE with KEEP, DENSE_RANK with KEEP)
-3. For finding values with MAX/MIN criteria, use window functions:
-   - ROW_NUMBER() OVER (PARTITION BY x ORDER BY y DESC)
-   - Or use a subquery with MAX/MIN
-4. Include as many relevant columns as makes sense for the business logic
-5. Use proper column aliases for calculated fields
-6. Handle NULL values appropriately with COALESCE or filtering
-7. Include appropriate WHERE, GROUP BY, ORDER BY clauses as needed
-8. Format the query clearly with proper line breaks
+1. Use ONLY Databricks/Spark SQL syntax (no Oracle, SQL Server, or PostgreSQL syntax)
+2. Do NOT use: KEEP, FIRST_VALUE with KEEP, DENSE_RANK with KEEP, TOP N
+3. For MAX/MIN with specific rows, use: ROW_NUMBER() OVER (ORDER BY x DESC) or subqueries
+4. Keep the query FOCUSED and CONCISE - answer the specific business question
+5. Avoid complex nested CTEs unless absolutely necessary
+6. Include relevant columns from the available set
+7. Use proper column aliases for calculated fields
+8. Handle NULL values with COALESCE or WHERE clauses
+9. Include WHERE, GROUP BY, ORDER BY as appropriate
+10. Format clearly with line breaks but keep under 50 lines total
 
-Generate a comprehensive SELECT query that fully addresses the business logic.
+Generate a clear, executable SELECT query that directly answers the business question.
 
 Return your response in this EXACT format:
 EXPLANATION: [A brief 1-2 sentence plain English explanation of what the query does and why]
-SQL: [The complete, well-formatted SQL query here]"""
+SQL: [The complete, well-formatted, executable SQL query here]"""
 
         # Call Databricks Foundation Model
         response = client.chat.completions.create(
@@ -551,11 +559,16 @@ SQL: [The complete, well-formatted SQL query here]"""
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=500,
+            max_tokens=2000,  # Increased from 500 to support complex queries with CTEs and window functions
             temperature=0.3
         )
 
         llm_response = response.choices[0].message.content.strip()
+
+        # Check if response was truncated due to max_tokens
+        finish_reason = response.choices[0].finish_reason if response.choices else None
+        if finish_reason == "length":
+            logger.warning("LLM response was truncated due to max_tokens limit. Query may be incomplete.")
 
         # Parse EXPLANATION and SQL from the response
         explanation = ""
@@ -573,6 +586,34 @@ SQL: [The complete, well-formatted SQL query here]"""
 
         # Remove markdown code blocks if present in SQL
         sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
+
+        # Validate that SQL query appears complete (basic sanity check)
+        # Check for common incomplete patterns
+        incomplete_patterns = [
+            r'\s+$',  # Ends with whitespace only
+            r'[,\s]+$',  # Ends with comma or whitespace
+            r'\s+(FROM|WHERE|AND|OR|JOIN|ON|GROUP|ORDER|HAVING)\s*$',  # Ends with SQL keyword
+        ]
+        import re
+        looks_incomplete = any(re.search(pattern, sql_query, re.IGNORECASE) for pattern in incomplete_patterns)
+
+        # Also check for unbalanced parentheses
+        open_parens = sql_query.count('(')
+        close_parens = sql_query.count(')')
+        unbalanced_parens = open_parens != close_parens
+
+        if looks_incomplete or unbalanced_parens or finish_reason == "length":
+            error_msg = "Generated SQL query appears incomplete or truncated."
+            if unbalanced_parens:
+                error_msg += f" Unbalanced parentheses: {open_parens} open, {close_parens} close."
+            if finish_reason == "length":
+                error_msg += " Response hit max_tokens limit."
+            logger.error(error_msg)
+            logger.error(f"Incomplete query: {sql_query[:200]}...")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate complete SQL query. {error_msg} Please try simplifying your request or selecting fewer columns."
+            )
 
         # Extract token usage from response
         prompt_tokens = response.usage.prompt_tokens if response.usage else 0
