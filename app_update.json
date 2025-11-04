@@ -1,0 +1,8 @@
+{
+  "default_source_ip_permissions": [
+    {
+      "action": "ALLOW",
+      "ip_addresses": ["0.0.0.0/0"]
+    }
+  ]
+}

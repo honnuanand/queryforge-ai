@@ -1,0 +1,8 @@
+{
+  "access_control_list": [
+    {
+      "group_name": "users",
+      "permission_level": "CAN_USE"
+    }
+  ]
+}

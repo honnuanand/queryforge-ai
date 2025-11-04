@@ -1,0 +1,46 @@
+{
+  "local": {
+    "/api/health": {
+      "status": "success",
+      "data": {
+        "status": "healthy",
+        "timestamp": "2025-11-04T21:31:24.606888",
+        "environment": "development"
+      }
+    },
+    "/api/dashboard-statistics": {
+      "status": "exception",
+      "error": "Expecting value: line 1 column 1 (char 0)"
+    },
+    "/api/query-history": {
+      "status": "exception",
+      "error": "Expecting value: line 1 column 1 (char 0)"
+    },
+    "/api/llm-analytics": {
+      "status": "exception",
+      "error": "Expecting value: line 1 column 1 (char 0)"
+    }
+  },
+  "deployed": {
+    "/api/health": {
+      "status": "error",
+      "code": 401,
+      "message": "{}"
+    },
+    "/api/dashboard-statistics": {
+      "status": "error",
+      "code": 401,
+      "message": "{}"
+    },
+    "/api/query-history": {
+      "status": "error",
+      "code": 401,
+      "message": "{}"
+    },
+    "/api/llm-analytics": {
+      "status": "error",
+      "code": 401,
+      "message": "{}"
+    }
+  }
+}

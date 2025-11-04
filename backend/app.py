@@ -193,7 +193,8 @@ async def log_audit_event(
         logger.info(f"Logged audit event: {event_type} - {log_id}")
     except Exception as e:
         # Don't fail the main operation if audit logging fails
-        logger.error(f"Failed to log audit event: {str(e)}")
+        logger.error(f"Failed to log audit event: {str(e)}", exc_info=True)
+        logger.error(f"Event details - Type: {event_type}, Catalog: {catalog}, Schema: {schema_name}, Table: {table_name}")
 
 @app.get("/api/health")
 async def health_check():
@@ -739,6 +740,7 @@ async def get_query_history():
                 rows = cursor.fetchall()
 
                 # Group events by table and timestamp proximity (within 30 seconds)
+                # IMPORTANT: Now handles queries without business_logic_suggestion
                 query_sessions = []
                 current_session = None
 
@@ -750,7 +752,6 @@ async def get_query_history():
                     event_type = record['event_type']
 
                     # Start a new session if we encounter a business_logic_suggestion
-                    # or if current session is more than 30 seconds old
                     if event_type == 'business_logic_suggestion':
                         if current_session:
                             query_sessions.append(current_session)
@@ -770,22 +771,69 @@ async def get_query_history():
                             'total_time_ms': record['execution_time_ms'] or 0,
                             'status': 'incomplete'
                         }
-                    elif event_type == 'sql_generation' and current_session:
-                        current_session['sql_generation'] = record
-                        current_session['generated_sql'] = record['generated_sql']
-                        current_session['total_cost_usd'] += record['estimated_cost_usd'] or 0
-                        current_session['total_tokens'] += record['total_tokens'] or 0
-                        current_session['total_time_ms'] += record['execution_time_ms'] or 0
-                    elif event_type == 'sql_execution' and current_session:
-                        current_session['sql_execution'] = record
-                        current_session['row_count'] = record['row_count']
-                        current_session['total_time_ms'] += record['execution_time_ms'] or 0
-                        current_session['status'] = record['status']
-                        # Execution marks end of session
-                        query_sessions.append(current_session)
-                        current_session = None
 
-                # Add last session if exists
+                    # Handle sql_generation - add to current session OR create new session if orphaned
+                    elif event_type == 'sql_generation':
+                        if current_session:
+                            # Add to existing session
+                            current_session['sql_generation'] = record
+                            current_session['generated_sql'] = record['generated_sql']
+                            current_session['total_cost_usd'] += record['estimated_cost_usd'] or 0
+                            current_session['total_tokens'] += record['total_tokens'] or 0
+                            current_session['total_time_ms'] += record['execution_time_ms'] or 0
+                        else:
+                            # Create new session starting with sql_generation (no suggestion)
+                            current_session = {
+                                'session_id': record['log_id'],
+                                'timestamp': record['timestamp'],
+                                'table_name': record['table_name'],
+                                'catalog': record['catalog'],
+                                'schema_name': record['schema_name'],
+                                'columns': record['columns'],
+                                'business_logic': record['business_logic'],
+                                'business_logic_suggestion': None,
+                                'sql_generation': record,
+                                'sql_execution': None,
+                                'generated_sql': record['generated_sql'],
+                                'total_cost_usd': record['estimated_cost_usd'] or 0,
+                                'total_tokens': record['total_tokens'] or 0,
+                                'total_time_ms': record['execution_time_ms'] or 0,
+                                'status': 'incomplete'
+                            }
+
+                    # Handle sql_execution - add to current session OR create standalone entry
+                    elif event_type == 'sql_execution':
+                        if current_session:
+                            # Add to existing session and complete it
+                            current_session['sql_execution'] = record
+                            current_session['row_count'] = record['row_count']
+                            current_session['total_time_ms'] += record['execution_time_ms'] or 0
+                            current_session['status'] = record['status']
+                            # Execution marks end of session
+                            query_sessions.append(current_session)
+                            current_session = None
+                        else:
+                            # Create standalone execution entry (orphaned execution)
+                            query_sessions.append({
+                                'session_id': record['log_id'],
+                                'timestamp': record['timestamp'],
+                                'table_name': record['table_name'],
+                                'catalog': record['catalog'],
+                                'schema_name': record['schema_name'],
+                                'columns': record['columns'],
+                                'business_logic': None,
+                                'business_logic_suggestion': None,
+                                'sql_generation': None,
+                                'sql_execution': record,
+                                'generated_sql': record['generated_sql'],
+                                'row_count': record['row_count'],
+                                'total_cost_usd': 0,
+                                'total_tokens': 0,
+                                'total_time_ms': record['execution_time_ms'] or 0,
+                                'status': record['status']
+                            })
+
+                # Add last session if exists (incomplete session)
                 if current_session:
                     query_sessions.append(current_session)
 
