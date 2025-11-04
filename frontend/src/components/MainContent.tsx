@@ -87,6 +87,17 @@ export default function MainContent({ selectedPage }: MainContentProps) {
       const stats = await statsRes.json()
       const costs = await costsRes.json()
 
+      // Debug logging for dashboard statistics
+      console.log('=== Dashboard API Response ===')
+      console.log('Stats API Response:', stats)
+      console.log('total_executions:', stats?.total_executions)
+      console.log('total_llm_calls:', stats?.total_llm_calls)
+      console.log('success_rate:', stats?.success_rate)
+      console.log('avg_execution_time_ms:', stats?.avg_execution_time_ms)
+      console.log('Costs API Response:', costs)
+      console.log('total_cost:', costs?.total_cost)
+      console.log('==============================')
+
       setHealthData(health)
       setStatistics(stats)
       setLlmCosts(costs)

@@ -631,11 +631,12 @@ async def get_dashboard_statistics():
                 # Total query executions
                 try:
                     cursor.execute("""
-                        SELECT COALESCE(COUNT(*), 0) as total_executions
+                        SELECT COUNT(*) as total_executions
                         FROM arao.text_to_sql.audit_logs
                         WHERE event_type = 'sql_execution'
                     """)
-                    total_executions = cursor.fetchone()[0] or 0
+                    rows = cursor.fetchall()
+                    total_executions = int(rows[0][0]) if rows and rows[0][0] is not None else 0
                     logger.info(f"Dashboard stats - total_executions: {total_executions}")
                 except Exception as e:
                     logger.error(f"Failed to get total_executions: {str(e)}", exc_info=True)
@@ -644,11 +645,12 @@ async def get_dashboard_statistics():
                 # Total LLM calls (business logic + SQL generation)
                 try:
                     cursor.execute("""
-                        SELECT COALESCE(COUNT(*), 0) as total_llm_calls
+                        SELECT COUNT(*) as total_llm_calls
                         FROM arao.text_to_sql.audit_logs
                         WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
                     """)
-                    total_llm_calls = cursor.fetchone()[0] or 0
+                    rows = cursor.fetchall()
+                    total_llm_calls = int(rows[0][0]) if rows and rows[0][0] is not None else 0
                     logger.info(f"Dashboard stats - total_llm_calls: {total_llm_calls}")
                 except Exception as e:
                     logger.error(f"Failed to get total_llm_calls: {str(e)}", exc_info=True)
@@ -685,11 +687,12 @@ async def get_dashboard_statistics():
                 # Total rows returned
                 try:
                     cursor.execute("""
-                        SELECT COALESCE(SUM(row_count), 0) as total_rows
+                        SELECT SUM(row_count) as total_rows
                         FROM arao.text_to_sql.audit_logs
                         WHERE event_type = 'sql_execution' AND status = 'success'
                     """)
-                    total_rows = cursor.fetchone()[0] or 0
+                    rows = cursor.fetchall()
+                    total_rows = int(rows[0][0]) if rows and rows[0][0] is not None else 0
                     logger.info(f"Dashboard stats - total_rows: {total_rows}")
                 except Exception as e:
                     logger.error(f"Failed to get total_rows: {str(e)}", exc_info=True)
@@ -698,11 +701,12 @@ async def get_dashboard_statistics():
                 # Unique tables analyzed
                 try:
                     cursor.execute("""
-                        SELECT COALESCE(COUNT(DISTINCT table_name), 0) as unique_tables
+                        SELECT COUNT(DISTINCT table_name) as unique_tables
                         FROM arao.text_to_sql.audit_logs
                         WHERE table_name IS NOT NULL
                     """)
-                    unique_tables = cursor.fetchone()[0] or 0
+                    rows = cursor.fetchall()
+                    unique_tables = int(rows[0][0]) if rows and rows[0][0] is not None else 0
                     logger.info(f"Dashboard stats - unique_tables: {unique_tables}")
                 except Exception as e:
                     logger.error(f"Failed to get unique_tables: {str(e)}", exc_info=True)
