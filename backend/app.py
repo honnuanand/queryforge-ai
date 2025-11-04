@@ -635,8 +635,12 @@ async def get_dashboard_statistics():
                         FROM arao.text_to_sql.audit_logs
                         WHERE event_type = 'sql_execution'
                     """)
-                    rows = cursor.fetchall()
-                    total_executions = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+                    # Iterate cursor to bypass pandas conversion
+                    result = None
+                    for row in cursor:
+                        result = row
+                        break
+                    total_executions = int(result[0]) if result and result[0] is not None else 0
                     logger.info(f"Dashboard stats - total_executions: {total_executions}")
                 except Exception as e:
                     logger.error(f"Failed to get total_executions: {str(e)}", exc_info=True)
@@ -649,8 +653,12 @@ async def get_dashboard_statistics():
                         FROM arao.text_to_sql.audit_logs
                         WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
                     """)
-                    rows = cursor.fetchall()
-                    total_llm_calls = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+                    # Iterate cursor to bypass pandas conversion
+                    result = None
+                    for row in cursor:
+                        result = row
+                        break
+                    total_llm_calls = int(result[0]) if result and result[0] is not None else 0
                     logger.info(f"Dashboard stats - total_llm_calls: {total_llm_calls}")
                 except Exception as e:
                     logger.error(f"Failed to get total_llm_calls: {str(e)}", exc_info=True)
@@ -691,8 +699,12 @@ async def get_dashboard_statistics():
                         FROM arao.text_to_sql.audit_logs
                         WHERE event_type = 'sql_execution' AND status = 'success'
                     """)
-                    rows = cursor.fetchall()
-                    total_rows = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+                    # Iterate cursor to bypass pandas conversion
+                    result = None
+                    for row in cursor:
+                        result = row
+                        break
+                    total_rows = int(result[0]) if result and result[0] is not None else 0
                     logger.info(f"Dashboard stats - total_rows: {total_rows}")
                 except Exception as e:
                     logger.error(f"Failed to get total_rows: {str(e)}", exc_info=True)
@@ -705,8 +717,12 @@ async def get_dashboard_statistics():
                         FROM arao.text_to_sql.audit_logs
                         WHERE table_name IS NOT NULL
                     """)
-                    rows = cursor.fetchall()
-                    unique_tables = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+                    # Iterate cursor to bypass pandas conversion
+                    result = None
+                    for row in cursor:
+                        result = row
+                        break
+                    unique_tables = int(result[0]) if result and result[0] is not None else 0
                     logger.info(f"Dashboard stats - unique_tables: {unique_tables}")
                 except Exception as e:
                     logger.error(f"Failed to get unique_tables: {str(e)}", exc_info=True)
