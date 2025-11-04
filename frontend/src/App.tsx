@@ -200,7 +200,7 @@ function App() {
               }}
             >
               <Typography variant="body2" color="text.secondary">
-                Built by Anand Rao
+                Developed by Anand Rao
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 •
