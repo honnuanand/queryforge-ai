@@ -43,8 +43,22 @@ text2sql/
 │   ├── app.py               # Main FastAPI server with all endpoints
 │   ├── requirements.txt     # Python dependencies
 │   └── .env                 # Environment configuration (local dev)
-├── build.py                 # Build script for production
-├── deploy_to_databricks.py  # Databricks deployment script
+├── scripts/                  # Utility scripts
+│   ├── build.py             # Build script for production
+│   └── permissions/         # Permission management scripts
+│       ├── grant_app_permissions.py
+│       ├── grant_by_id.py
+│       ├── grant_sp_permissions.py
+│       └── check_audit_logs.py
+├── tests/                    # Test scripts
+│   ├── test_*.py            # Various test files
+│   ├── capture_query_history.py
+│   └── results/             # Test results
+├── docs/                     # Documentation
+│   ├── SETUP.md             # Detailed setup instructions
+│   ├── TESTING.md           # Testing guide
+│   └── JOIN_QUERY_IMPLEMENTATION_STATUS.md
+├── deploy_to_databricks.py  # Databricks deployment script (root for easy access)
 ├── app.yaml                 # Databricks app configuration
 └── README.md                # This file
 ```
@@ -139,7 +153,7 @@ Open your browser to http://localhost:5673
 Run the build script to compile everything:
 
 ```bash
-python build.py
+python scripts/build.py
 ```
 
 This will:
@@ -370,10 +384,11 @@ server: {
 
 1. **Make changes** to frontend or backend code
 2. **Test locally** using the local development setup
-3. **Verify features** work with real Databricks data
-4. **Build** using `python build.py`
-5. **Deploy** using `python deploy_to_databricks.py`
-6. **Monitor** using the analytics dashboard
+3. **Run tests** from the `tests/` directory (see `docs/TESTING.md` for details)
+4. **Verify features** work with real Databricks data
+5. **Build** using `python scripts/build.py`
+6. **Deploy** using `python deploy_to_databricks.py`
+7. **Monitor** using the analytics dashboard
 
 ## Performance Optimizations
 

@@ -227,7 +227,7 @@ env:
 ### 5.3 Grant Permissions to Service Principal
 
 ```bash
-python3 grant_app_permissions.py
+python3 scripts/permissions/grant_app_permissions.py
 ```
 
 Or run the SQL in `grant_permissions.sql`:
@@ -252,7 +252,7 @@ This creates optimized production files in `frontend/dist/`.
 ### 5.5 Copy Built Files to Backend
 
 ```bash
-python3 build.py
+python3 scripts/build.py
 ```
 
 This copies `frontend/dist/` to `backend/static/` for serving.
@@ -335,7 +335,7 @@ Should return:
 ### Error: "401 Unauthorized"
 
 **Problem:** Service principal doesn't have permissions
-**Solution:** Run `python3 grant_app_permissions.py` to grant necessary permissions
+**Solution:** Run `python3 scripts/permissions/grant_app_permissions.py` to grant necessary permissions
 
 ### Error: "Table not found"
 
@@ -372,7 +372,7 @@ Should return:
 3. Build frontend:
    ```bash
    cd frontend && npm run build
-   python3 build.py
+   python3 scripts/build.py
    ```
 
 4. Deploy (soft deploy for code changes):
