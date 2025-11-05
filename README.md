@@ -400,6 +400,16 @@ server: {
 - [ ] Natural language query editing
 - [ ] Integration with Databricks notebooks
 
+## Acknowledgments
+
+### About the Name "QueryForge"
+
+The name "QueryForge" was independently chosen for this project as a descriptive combination of "Query" + "Forge" (as in forging/creating queries). We later discovered that others in the AI-to-SQL space have arrived at similar naming, which speaks to how intuitive the metaphor is for this type of tool.
+
+Notably, [Soumyajit Mallick built a similar tool called QueryForge](https://www.linkedin.com/pulse/i-built-queryforge-turn-natural-language-sql-queries-ai-mallick-m1vfc/) for converting natural language to SQL queries. While our implementations and architectures differ (ours being built specifically for Databricks with Unity Catalog integration, multi-table join capabilities, and Foundation Model APIs), we share the common goal of making data more accessible through natural language interfaces.
+
+This convergence of naming reflects the growing recognition in the data community that AI-powered SQL generation tools are "forging" a new way to interact with data. We're excited to be part of this movement alongside other innovators in the space.
+
 ## License
 
 MIT License - feel free to use this project as a template for your own applications.
