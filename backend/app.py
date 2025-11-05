@@ -70,6 +70,11 @@ class SQLGenerationRequest(BaseModel):
     columns: List[str]
     business_logic: str
     model_id: str = "databricks-llama-4-maverick"
+    # Optional second table for joins
+    catalog2: Optional[str] = None
+    schema_name2: Optional[str] = None
+    table2: Optional[str] = None
+    columns2: Optional[List[str]] = None
 
 class TableInfo(BaseModel):
     catalog: str
@@ -81,6 +86,7 @@ class MultiTableSQLGenerationRequest(BaseModel):
     tables: List[TableInfo]
     business_logic: str
     model_id: str = "databricks-llama-4-maverick"
+    join_conditions: Optional[str] = None  # Optional explicit JOIN conditions
 
 class SQLExecutionRequest(BaseModel):
     sql_query: str
@@ -90,6 +96,11 @@ class BusinessLogicSuggestionRequest(BaseModel):
     schema_name: str  # Renamed from 'schema'
     table: str
     columns: List[str]
+    model_id: str = "databricks-llama-4-maverick"
+    additional_tables: Optional[List[TableInfo]] = None  # For multi-table queries
+
+class JoinConditionSuggestionRequest(BaseModel):
+    tables: List[TableInfo]
     model_id: str = "databricks-llama-4-maverick"
 
 # LLM Cost calculation (approximate pricing per 1M tokens)
@@ -365,21 +376,153 @@ async def suggest_business_logic(request: BusinessLogicSuggestionRequest):
             base_url=f"{DATABRICKS_HOST}/serving-endpoints"
         )
 
-        # Build context about the table
-        table_context = f"""
-        Table: {request.catalog}.{request.schema_name}.{request.table}
-        Available Columns: {', '.join(request.columns)}
-        """
+        # Build comprehensive context about all tables
+        def fetch_table_metadata(table_info, idx):
+            """Fetch metadata and sample data for a single table (runs in thread pool)"""
+            full_table_name = f"{table_info.catalog}.{table_info.schema_name}.{table_info.table}"
+            context = f"\nTable {idx}: {full_table_name}\n"
+
+            try:
+                conn = sql.connect(
+                    server_hostname=DATABRICKS_HOST.replace("https://", ""),
+                    http_path=DATABRICKS_HTTP_PATH,
+                    access_token=DATABRICKS_TOKEN
+                )
+                cursor = conn.cursor()
+
+                # Fetch table metadata and column descriptions
+                describe_query = f"DESCRIBE TABLE EXTENDED {full_table_name}"
+                cursor.execute(describe_query)
+                describe_results = cursor.fetchall()
+
+                # Parse column metadata
+                column_metadata = {}
+                table_comment = None
+                in_detailed_info = False
+
+                for row in describe_results:
+                    col_name = row[0]
+                    data_type = row[1]
+                    comment = row[2] if len(row) > 2 else None
+
+                    if col_name and '# Detailed Table Information' in col_name:
+                        in_detailed_info = True
+                        continue
+
+                    if in_detailed_info and col_name and 'Comment' in col_name and comment:
+                        table_comment = comment
+                        continue
+
+                    if not in_detailed_info and col_name and col_name.strip() and not col_name.startswith('#'):
+                        if col_name in table_info.columns:
+                            column_metadata[col_name] = {
+                                'type': data_type,
+                                'comment': comment if comment else ''
+                            }
+
+                # Add table comment if available
+                if table_comment:
+                    context += f"Table Description: {table_comment}\n"
+
+                # Add column information with metadata
+                context += "\nColumns:\n"
+                for col in table_info.columns:
+                    if col in column_metadata:
+                        meta = column_metadata[col]
+                        context += f"  - {col} ({meta['type']})"
+                        if meta['comment']:
+                            context += f": {meta['comment']}"
+                        context += "\n"
+                    else:
+                        context += f"  - {col}\n"
+
+                # Fetch sample data (first 5 rows)
+                columns_str = ', '.join(table_info.columns)
+                sample_query = f"SELECT {columns_str} FROM {full_table_name} LIMIT 5"
+                cursor.execute(sample_query)
+                rows = cursor.fetchall()
+
+                if rows:
+                    context += "\nSample Data (first 5 rows):\n"
+                    context += " | ".join(table_info.columns) + "\n"
+                    context += "-" * (len(" | ".join(table_info.columns))) + "\n"
+                    for row in rows:
+                        row_values = [str(val) if val is not None else 'NULL' for val in row]
+                        context += " | ".join(row_values) + "\n"
+                context += "\n"
+
+                cursor.close()
+                conn.close()
+                return context
+            except Exception as e:
+                logger.warning(f"Failed to fetch metadata/data for {table_info.table}: {str(e)}")
+                context += f"Columns: {', '.join(table_info.columns)}\n"
+                context += "(Could not fetch metadata or sample data)\n\n"
+                return context
+
+        # Create a list of all tables to process
+        all_tables = [TableInfo(
+            catalog=request.catalog,
+            schema_name=request.schema_name,
+            table=request.table,
+            columns=request.columns
+        )]
+
+        if request.additional_tables:
+            all_tables.extend(request.additional_tables)
+
+        # Fetch metadata for all tables with timeout (run in thread pool)
+        import asyncio
+        tables_context = ""
+        try:
+            for idx, table_info in enumerate(all_tables, 1):
+                # Run each table fetch with timeout
+                table_context = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_table_metadata, table_info, idx),
+                    timeout=10.0  # 10 second timeout per table
+                )
+                tables_context += table_context
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout fetching metadata for table {idx}")
+            tables_context += f"(Timeout fetching metadata)\n\n"
+        except Exception as e:
+            logger.warning(f"Error fetching table metadata: {str(e)}")
+            tables_context += f"(Error fetching metadata)\n\n"
 
         # Create prompt for business logic suggestions
-        system_prompt = """You are a helpful data analyst assistant specializing in business intelligence and data analysis.
+        is_multi_table = len(all_tables) > 1
+
+        if is_multi_table:
+            system_prompt = """You are a helpful data analyst assistant specializing in business intelligence and data analysis.
+Generate diverse, comprehensive business logic examples for MULTI-TABLE queries.
+Each suggestion should leverage data from multiple tables and demonstrate JOIN query scenarios.
+Focus on realistic business scenarios that require combining data across tables."""
+
+            user_prompt = f"""Based on these tables with their metadata and sample data:
+
+{tables_context}
+
+Generate 5 diverse business logic examples for analyzing this data with JOIN queries. Each suggestion should:
+- Be a clear, natural language business question
+- REQUIRE data from MULTIPLE tables (these are JOIN query suggestions!)
+- Leverage the relationships between tables based on common columns
+- Represent different query types (aggregation across tables, filtering with joins, ranking, comparisons)
+- Be realistic and actionable for business users
+- Be 1-2 sentences maximum
+
+IMPORTANT: Since this is for multi-table queries, ensure suggestions explicitly need data from at least 2 tables!
+
+Format your response as a simple numbered list (1. 2. 3. 4. 5.), with each suggestion on a new line.
+Do NOT use bullet points, quotes, or JSON format. Just natural language numbered sentences."""
+        else:
+            system_prompt = """You are a helpful data analyst assistant specializing in business intelligence and data analysis.
 Generate diverse, comprehensive business logic examples that demonstrate different types of analytical queries.
 Each suggestion should be a clear business question that leverages multiple columns from the dataset.
 Focus on realistic business scenarios including aggregations, filtering, grouping, and comparisons."""
 
-        user_prompt = f"""Based on this table information:
+            user_prompt = f"""Based on this table with its metadata and sample data:
 
-{table_context}
+{tables_context}
 
 Generate 5 diverse business logic examples for analyzing this data. Each suggestion should:
 - Be a clear, natural language business question
@@ -483,9 +626,247 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         logger.error("Error generating business logic suggestions: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate suggestions: {str(e)}")
 
+@app.post("/api/suggest-join-conditions")
+async def suggest_join_conditions(request: JoinConditionSuggestionRequest):
+    """Suggest JOIN conditions by analyzing table structures using AI"""
+    start_time = time.time()
+    try:
+        if len(request.tables) < 2:
+            raise HTTPException(status_code=400, detail="At least 2 tables required for join condition suggestions")
+
+        # Initialize OpenAI client with Databricks endpoint
+        client = openai.OpenAI(
+            api_key=DATABRICKS_TOKEN,
+            base_url=f"{DATABRICKS_HOST}/serving-endpoints"
+        )
+
+        # Build context about all tables including metadata and sample data
+        def fetch_table_context(table, idx):
+            """Fetch metadata and sample data for a single table (runs in thread pool)"""
+            full_table_name = f"{table.catalog}.{table.schema_name}.{table.table}"
+            context = f"\nTable {idx}: {full_table_name}\n"
+
+            try:
+                conn = sql.connect(
+                    server_hostname=DATABRICKS_HOST.replace("https://", ""),
+                    http_path=DATABRICKS_HTTP_PATH,
+                    access_token=DATABRICKS_TOKEN
+                )
+                cursor = conn.cursor()
+
+                # Fetch table metadata and column descriptions
+                describe_query = f"DESCRIBE TABLE EXTENDED {full_table_name}"
+                cursor.execute(describe_query)
+                describe_results = cursor.fetchall()
+
+                # Parse column metadata
+                column_metadata = {}
+                table_comment = None
+                in_detailed_info = False
+
+                for row in describe_results:
+                    col_name = row[0]
+                    data_type = row[1]
+                    comment = row[2] if len(row) > 2 else None
+
+                    # Check if we've reached the detailed table info section
+                    if col_name and '# Detailed Table Information' in col_name:
+                        in_detailed_info = True
+                        continue
+
+                    # Extract table comment from detailed info
+                    if in_detailed_info and col_name and 'Comment' in col_name and comment:
+                        table_comment = comment
+                        continue
+
+                    # Only process actual column metadata (before detailed info section)
+                    if not in_detailed_info and col_name and col_name.strip() and not col_name.startswith('#'):
+                        # Only include selected columns
+                        if col_name in table.columns:
+                            column_metadata[col_name] = {
+                                'type': data_type,
+                                'comment': comment if comment else ''
+                            }
+
+                # Add table comment if available
+                if table_comment:
+                    context += f"Table Description: {table_comment}\n"
+
+                # Add column information with metadata
+                context += "\nColumns:\n"
+                for col in table.columns:
+                    if col in column_metadata:
+                        meta = column_metadata[col]
+                        context += f"  - {col} ({meta['type']})"
+                        if meta['comment']:
+                            context += f": {meta['comment']}"
+                        context += "\n"
+                    else:
+                        context += f"  - {col}\n"
+
+                # Fetch sample data (first 5 rows)
+                columns_str = ', '.join(table.columns)
+                sample_query = f"SELECT {columns_str} FROM {full_table_name} LIMIT 5"
+                cursor.execute(sample_query)
+                rows = cursor.fetchall()
+
+                if rows:
+                    context += "\nSample Data (first 5 rows):\n"
+                    # Add header
+                    context += " | ".join(table.columns) + "\n"
+                    context += "-" * (len(" | ".join(table.columns))) + "\n"
+                    # Add rows
+                    for row in rows:
+                        row_values = [str(val) if val is not None else 'NULL' for val in row]
+                        context += " | ".join(row_values) + "\n"
+                context += "\n"
+
+                cursor.close()
+                conn.close()
+                return context
+            except Exception as e:
+                logger.warning(f"Failed to fetch metadata/data for {table.table}: {str(e)}")
+                context += f"Columns: {', '.join(table.columns)}\n"
+                context += "(Could not fetch metadata or sample data)\n\n"
+                return context
+
+        # Fetch metadata for all tables with timeout (run in thread pool)
+        import asyncio
+        tables_context = ""
+        try:
+            for idx, table in enumerate(request.tables, 1):
+                # Run each table fetch with timeout
+                table_context = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_table_context, table, idx),
+                    timeout=10.0  # 10 second timeout per table
+                )
+                tables_context += table_context
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout fetching metadata for table {idx}")
+            tables_context += f"(Timeout fetching metadata)\n\n"
+        except Exception as e:
+            logger.warning(f"Error fetching table metadata: {str(e)}")
+            tables_context += f"(Error fetching metadata)\n\n"
+
+        # Create prompt for join condition suggestions
+        system_prompt = """You are a database expert specializing in SQL joins.
+You will receive:
+1. Table and column descriptions/comments from the database metadata
+2. Column data types
+3. Actual sample data from each table
+
+Use ALL this information to determine the most accurate JOIN conditions."""
+
+        user_prompt = f"""Analyze these tables with their metadata and sample data to suggest JOIN conditions:
+
+{tables_context}
+
+ANALYSIS STEPS:
+1. **READ DESCRIPTIONS**: Review table and column descriptions/comments to understand what each represents
+2. **CHECK DATA TYPES**: Ensure matching columns have compatible data types
+3. **EXAMINE SAMPLE DATA**: Look at the actual values in each column across tables
+4. **IDENTIFY MATCHING VALUES**: Find columns that contain the same or related values
+5. **EXACT COLUMN NAME MATCHES**: Prioritize columns with identical names (e.g., "aircraft_id" in both tables)
+6. **SEMANTIC RELATIONSHIPS**: Use descriptions to identify relationships (e.g., "aircraft identifier" and "aircraft id")
+7. **FOREIGN KEY PATTERNS**: Look for id/foreign_key patterns (e.g., users.id matches orders.user_id)
+
+CRITICAL RULES (in priority order):
+1. **EXACT MATCHES WITH DATA PROOF**: If columns have the same name AND matching values in sample data, use those!
+2. **SEMANTIC + VALUE MATCH**: If descriptions indicate relationship AND values overlap, use those columns
+3. **VALUE OVERLAP**: If you see the same values appearing in different columns across tables, those are join keys
+4. **Foreign Key Patterns**: table1.id = table2.tablename_id (e.g., users.id = orders.user_id)
+5. **Table Aliases**: Always use t1, t2, t3, etc. as table aliases
+6. **Multiple Tables**: Chain joins logically (e.g., t1.id = t2.fk AND t2.id = t3.fk)
+
+EXAMPLES:
+- If both tables have "aircraft_id" with overlapping values → "t1.aircraft_id = t2.aircraft_id"
+- If Table 1 "user_id" values match Table 2 "id" values → "t1.user_id = t2.id"
+- If you see same IDs appearing in both columns → use those columns for JOIN
+
+Output ONLY the JOIN condition (no SELECT, no FROM, no explanations):
+Format: "t1.column = t2.column" or "t1.col1 = t2.col2 AND t2.col3 = t3.col4"
+"""
+
+        # Call Databricks Foundation Model
+        response = client.chat.completions.create(
+            model=request.model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=300,  # Increased for more complex analysis
+            temperature=0.2  # Very low temperature for deterministic, data-driven decisions
+        )
+
+        suggested_condition = response.choices[0].message.content.strip()
+
+        # Clean up the response - remove any surrounding quotes or extra formatting
+        suggested_condition = suggested_condition.strip('"').strip("'").strip('`')
+
+        # Remove common prefixes if present
+        prefixes_to_remove = ["ON ", "WHERE ", "JOIN ON "]
+        for prefix in prefixes_to_remove:
+            if suggested_condition.startswith(prefix):
+                suggested_condition = suggested_condition[len(prefix):].strip()
+
+        # Extract token usage
+        prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+        completion_tokens = response.usage.completion_tokens if response.usage else 0
+        total_tokens = response.usage.total_tokens if response.usage else 0
+
+        # Calculate cost
+        estimated_cost = calculate_llm_cost(request.model_id, prompt_tokens, completion_tokens)
+
+        # Calculate execution time
+        execution_time_ms = int((time.time() - start_time) * 1000)
+
+        # Log audit event
+        table_names = [f"{t.catalog}.{t.schema_name}.{t.table}" for t in request.tables]
+        await log_audit_event(
+            event_type="join_condition_suggestion",
+            catalog=request.tables[0].catalog,
+            schema_name=request.tables[0].schema_name,
+            table_name=f"[JOIN: {' + '.join([t.table for t in request.tables])}]",
+            columns=[col for table in request.tables for col in table.columns],
+            business_logic=suggested_condition,
+            model_id=request.model_id,
+            execution_time_ms=execution_time_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost,
+            status="success"
+        )
+
+        return {
+            "join_condition": suggested_condition,
+            "model_used": request.model_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Calculate execution time for error case
+        execution_time_ms = int((time.time() - start_time) * 1000)
+
+        # Log audit event for error
+        if len(request.tables) > 0:
+            await log_audit_event(
+                event_type="join_condition_suggestion",
+                catalog=request.tables[0].catalog,
+                schema_name=request.tables[0].schema_name,
+                table_name=f"[JOIN: {' + '.join([t.table for t in request.tables])}]",
+                model_id=request.model_id,
+                execution_time_ms=execution_time_ms,
+                status="error",
+                error_message=str(e)
+            )
+
+        logger.error("Error suggesting join conditions: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to suggest join conditions: {str(e)}")
+
 @app.post("/api/generate-sql")
-async def generate_sql(request: SQLGenerationRequest):
-    """Generate SQL query using Databricks Foundation Model"""
+async def generate_sql(request: MultiTableSQLGenerationRequest):
+    """Generate SQL query using Databricks Foundation Model (supports multiple tables)"""
     start_time = time.time()
     try:
         # Initialize OpenAI client with Databricks endpoint
@@ -494,10 +875,34 @@ async def generate_sql(request: SQLGenerationRequest):
             base_url=f"{DATABRICKS_HOST}/serving-endpoints"
         )
 
-        # Build context about the table
-        table_context = f"""
-        Table: {request.catalog}.{request.schema_name}.{request.table}
-        Selected Columns: {', '.join(request.columns)}
+        # Build context about the table(s)
+        if len(request.tables) == 1:
+            # Single table query
+            table = request.tables[0]
+            table_context = f"""
+        Table: {table.catalog}.{table.schema_name}.{table.table}
+        Selected Columns: {', '.join(table.columns)}
+        """
+        else:
+            # Multiple tables - prepare for JOIN query
+            table_context = "Tables to JOIN:\n\n"
+            for idx, table in enumerate(request.tables, 1):
+                table_context += f"""
+        Table {idx}: {table.catalog}.{table.schema_name}.{table.table}
+        Table {idx} Columns: {', '.join(table.columns)}
+"""
+
+            # Add explicit join conditions if provided
+            if request.join_conditions:
+                table_context += f"""
+        EXPLICIT JOIN CONDITIONS PROVIDED BY USER:
+        {request.join_conditions}
+
+        NOTE: Use the explicit JOIN conditions above. The user has specified exactly how these tables should be joined.
+        """
+            else:
+                table_context += """
+        NOTE: You should generate a query that JOINs these tables. Determine the appropriate JOIN type and join conditions based on the business logic and column names. Look for common columns like id, user_id, customer_id, etc. to infer relationships.
         """
 
         # Create prompt for SQL generation
@@ -521,6 +926,13 @@ QUERY QUALITY REQUIREMENTS:
 - Apply relevant filters, aggregations, and ordering
 - Consider edge cases (NULL values, empty results)
 - IMPORTANT: Keep queries concise and executable - avoid excessive nesting
+
+JOIN QUERY RULES (when multiple tables provided):
+- Determine the appropriate JOIN type (INNER, LEFT, RIGHT, FULL OUTER) based on business logic
+- Infer join conditions by identifying common column names (e.g., id, user_id, etc.)
+- Use table aliases (e.g., t1, t2) for clarity
+- Fully qualify all column names with table aliases
+- Prefer INNER JOIN unless business logic suggests otherwise
 
 QUERY LENGTH:
 - Aim for queries under 50 lines when possible
@@ -627,13 +1039,21 @@ SQL: [The complete, well-formatted, executable SQL query here]"""
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Log audit event
+        # For multi-table queries, log primary table info and note all tables in business_logic
+        primary_table = request.tables[0]
+        audit_business_logic = request.business_logic
+
+        if len(request.tables) > 1:
+            table_names = [t.table for t in request.tables]
+            audit_business_logic = f"[JOIN: {' + '.join(table_names)}] {request.business_logic}"
+
         await log_audit_event(
             event_type="sql_generation",
-            catalog=request.catalog,
-            schema_name=request.schema_name,
-            table_name=request.table,
-            columns=request.columns,
-            business_logic=request.business_logic,
+            catalog=primary_table.catalog,
+            schema_name=primary_table.schema_name,
+            table_name=primary_table.table,
+            columns=primary_table.columns,
+            business_logic=audit_business_logic,
             generated_sql=sql_query,
             model_id=request.model_id,
             execution_time_ms=execution_time_ms,
@@ -654,18 +1074,20 @@ SQL: [The complete, well-formatted, executable SQL query here]"""
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Log audit event for error
-        await log_audit_event(
-            event_type="sql_generation",
-            catalog=request.catalog,
-            schema_name=request.schema_name,
-            table_name=request.table,
-            columns=request.columns,
-            business_logic=request.business_logic,
-            model_id=request.model_id,
-            execution_time_ms=execution_time_ms,
-            status="error",
-            error_message=str(e)
-        )
+        primary_table = request.tables[0] if request.tables else None
+        if primary_table:
+            await log_audit_event(
+                event_type="sql_generation",
+                catalog=primary_table.catalog,
+                schema_name=primary_table.schema_name,
+                table_name=primary_table.table,
+                columns=primary_table.columns,
+                business_logic=request.business_logic,
+                model_id=request.model_id,
+                execution_time_ms=execution_time_ms,
+                status="error",
+                error_message=str(e)
+            )
 
         raise HTTPException(status_code=500, detail=f"Failed to generate SQL: {str(e)}")
 
@@ -1036,51 +1458,75 @@ async def get_llm_analytics():
 @app.get("/api/llm-costs-by-model")
 async def get_llm_costs_by_model():
     """Get aggregated LLM costs grouped by model"""
+
+    def fetch_costs():
+        """Run blocking SQL query in thread pool"""
+        try:
+            with sql.connect(
+                server_hostname=DATABRICKS_HOST.replace("https://", ""),
+                http_path=DATABRICKS_HTTP_PATH,
+                access_token=DATABRICKS_TOKEN,
+                _socket_timeout=3  # 3 second socket timeout
+            ) as connection:
+                with connection.cursor() as cursor:
+                    # Get costs aggregated by model
+                    cursor.execute("""
+                        SELECT
+                            model_id,
+                            SUM(prompt_tokens) as total_prompt_tokens,
+                            SUM(completion_tokens) as total_completion_tokens,
+                            SUM(total_tokens) as total_tokens,
+                            SUM(estimated_cost_usd) as total_cost,
+                            COUNT(*) as call_count
+                        FROM arao.text_to_sql.audit_logs
+                        WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
+                        AND status = 'success'
+                        AND model_id IS NOT NULL
+                        GROUP BY model_id
+                        ORDER BY total_cost DESC
+                    """)
+
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = cursor.fetchall()
+
+                    models = []
+                    total_cost = 0
+                    total_prompt_tokens = 0
+                    total_completion_tokens = 0
+
+                    for row in rows:
+                        record = dict(zip(columns, row))
+                        models.append(record)
+                        total_cost += record['total_cost'] or 0
+                        total_prompt_tokens += record['total_prompt_tokens'] or 0
+                        total_completion_tokens += record['total_completion_tokens'] or 0
+
+                    return {
+                        "models": models,
+                        "total_cost": total_cost,
+                        "total_prompt_tokens": total_prompt_tokens,
+                        "total_completion_tokens": total_completion_tokens
+                    }
+        except Exception as e:
+            logger.warning(f"Error fetching LLM costs: {str(e)}")
+            raise
+
     try:
-        with sql.connect(
-            server_hostname=DATABRICKS_HOST.replace("https://", ""),
-            http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
-        ) as connection:
-            with connection.cursor() as cursor:
-                # Get costs aggregated by model
-                cursor.execute("""
-                    SELECT
-                        model_id,
-                        SUM(prompt_tokens) as total_prompt_tokens,
-                        SUM(completion_tokens) as total_completion_tokens,
-                        SUM(total_tokens) as total_tokens,
-                        SUM(estimated_cost_usd) as total_cost,
-                        COUNT(*) as call_count
-                    FROM arao.text_to_sql.audit_logs
-                    WHERE event_type IN ('business_logic_suggestion', 'sql_generation')
-                    AND status = 'success'
-                    AND model_id IS NOT NULL
-                    GROUP BY model_id
-                    ORDER BY total_cost DESC
-                """)
-
-                columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-
-                models = []
-                total_cost = 0
-                total_prompt_tokens = 0
-                total_completion_tokens = 0
-
-                for row in rows:
-                    record = dict(zip(columns, row))
-                    models.append(record)
-                    total_cost += record['total_cost'] or 0
-                    total_prompt_tokens += record['total_prompt_tokens'] or 0
-                    total_completion_tokens += record['total_completion_tokens'] or 0
-
-                return {
-                    "models": models,
-                    "total_cost": total_cost,
-                    "total_prompt_tokens": total_prompt_tokens,
-                    "total_completion_tokens": total_completion_tokens
-                }
+        # Run blocking query in thread pool with timeout
+        import asyncio
+        result = await asyncio.wait_for(
+            asyncio.to_thread(fetch_costs),
+            timeout=5.0  # 5 second total timeout
+        )
+        return result
+    except asyncio.TimeoutError:
+        logger.warning("LLM costs query timed out after 5 seconds")
+        return {
+            "models": [],
+            "total_cost": 0.0,
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0
+        }
     except Exception as e:
         logger.error(f"Error fetching LLM costs by model: {str(e)}", exc_info=True)
         # Return default values instead of failing

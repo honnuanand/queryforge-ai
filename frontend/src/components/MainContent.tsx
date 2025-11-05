@@ -25,6 +25,7 @@ import SpeedIcon from '@mui/icons-material/Speed'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import InfoIcon from '@mui/icons-material/Info'
 import SQLGenerator from './SQLGenerator'
+import JoinQueryGenerator from './JoinQueryGenerator'
 import QueryHistory from './QueryHistory'
 import Analytics from './Analytics'
 
@@ -133,9 +134,14 @@ export default function MainContent({ selectedPage }: MainContentProps) {
     exit: { opacity: 0, y: -20 },
   }
 
-  // Show SQL Generator for SQL Generator page
-  if (selectedPage === 'SQL Generator') {
+  // Show SQL Generator for Single Table page
+  if (selectedPage === 'Single Table') {
     return <SQLGenerator />
+  }
+
+  // Show Join Query Generator for Join Query page
+  if (selectedPage === 'Join Query') {
+    return <JoinQueryGenerator />
   }
 
   // Show Query History for Query History page

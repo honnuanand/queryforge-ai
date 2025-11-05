@@ -1,17 +1,25 @@
-# Text to SQL Application
+# QueryForge - AI-Powered SQL Query Generator
 
 > **🚀 Quick Deploy**: To deploy this app to Databricks, run `python deploy_to_databricks.py`
 
-A modern web application that converts natural language business logic into SQL queries using AI. Built with React, FastAPI, and designed for deployment on Databricks Apps.
+A modern web application that converts natural language business logic into SQL queries using AI. Built with React, FastAPI, and Databricks Foundation Models, designed for deployment on Databricks Apps.
 
 ## Features
 
-- 🎯 **Catalog Browser**: Browse and select tables and columns from your Databricks workspace
-- 🤖 **AI-Powered SQL Generation**: Convert natural language to SQL using LLM
-- ⚡ **Query Execution**: Test generated SQL queries against your data
-- 📊 **Results Visualization**: View query results in a clean, modern interface
+### Core Functionality
+- 🎯 **Catalog Browser**: Browse and select tables and columns from your Databricks Unity Catalog
+- 🤖 **AI-Powered SQL Generation**: Convert natural language to SQL using Databricks Foundation Models (Meta Llama)
+- ⚡ **Query Execution**: Execute generated SQL queries against Databricks SQL Warehouses
+- 📊 **Results Visualization**: View query results in a clean, modern table interface
+- 📜 **Query History**: Track all executed queries with timestamps and status
+- 💰 **LLM Cost Tracking**: Monitor AI model usage and costs in real-time
+
+### Advanced Features
+- 🔗 **Multi-Table Join Queries**: Generate SQL queries that join multiple tables with AI-assisted join condition suggestions
+- 💡 **AI Business Logic Assistant**: Get intelligent suggestions for business logic based on table metadata and sample data
 - 🎨 **Modern UI**: Built with Material-UI and Framer Motion animations
 - 🔄 **Real-time Updates**: Smooth transitions and responsive design
+- 📈 **Analytics Dashboard**: View statistics on query execution, table usage, and model performance
 
 ## Project Structure
 
@@ -21,14 +29,20 @@ text2sql/
 │   ├── src/
 │   │   ├── App.tsx          # Main application component
 │   │   ├── components/      # React components
+│   │   │   ├── SQLGenerator.tsx        # Single table query generator
+│   │   │   ├── JoinQueryGenerator.tsx  # Multi-table join query generator
+│   │   │   ├── QueryHistory.tsx        # Query history viewer
+│   │   │   ├── Dashboard.tsx           # Analytics dashboard
+│   │   │   ├── NavigationDrawer.tsx    # Sidebar navigation
+│   │   │   └── MainContent.tsx         # Main content router
 │   │   └── main.tsx         # Application entry point
 │   ├── package.json         # Frontend dependencies
 │   ├── tsconfig.json        # TypeScript configuration
 │   └── vite.config.ts       # Vite build configuration
 ├── backend/                  # FastAPI application
-│   ├── app.py               # Main FastAPI server
+│   ├── app.py               # Main FastAPI server with all endpoints
 │   ├── requirements.txt     # Python dependencies
-│   └── .env                 # Environment configuration
+│   └── .env                 # Environment configuration (local dev)
 ├── build.py                 # Build script for production
 ├── deploy_to_databricks.py  # Databricks deployment script
 ├── app.yaml                 # Databricks app configuration
@@ -39,6 +53,8 @@ text2sql/
 
 - **Node.js** 18+ and npm
 - **Python** 3.9+
+- **Databricks Workspace** with Unity Catalog
+- **Databricks SQL Warehouse** (Serverless recommended)
 - **Databricks CLI** (for deployment)
 
 ## Local Development
@@ -47,11 +63,30 @@ text2sql/
 
 ```bash
 cd backend
+
+# Create a .env file with your Databricks credentials
+cat > .env << EOF
+ENV=development
+PORT=8680
+DEBUG=True
+CORS_ORIGINS=http://localhost:5673
+
+# Databricks Configuration
+DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+DATABRICKS_TOKEN=your-databricks-token
+DATABRICKS_CATALOG=your_catalog
+DATABRICKS_SCHEMA=your_schema
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-warehouse-id
+EOF
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Run the backend
 python app.py
 ```
 
-The backend will run on http://localhost:8000
+The backend will run on http://localhost:8680
 
 ### 2. Frontend Setup
 
@@ -63,15 +98,41 @@ npm install
 npm run dev
 ```
 
-The frontend will run on http://localhost:5173 with API proxying to the backend.
+The frontend will run on http://localhost:5673 with API proxying to the backend.
 
 ### 3. Access the Application
 
-Open your browser to http://localhost:5173
+Open your browser to http://localhost:5673
 
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
+- **Frontend**: http://localhost:5673
+- **Backend API**: http://localhost:8680
+- **API Docs**: http://localhost:8680/docs
+
+## Key API Endpoints
+
+### Catalog Management
+- `GET /api/catalogs` - List all available catalogs
+- `GET /api/catalogs/{catalog}/schemas` - List schemas in a catalog
+- `GET /api/catalogs/{catalog}/schemas/{schema}/tables` - List tables in a schema
+- `GET /api/catalogs/{catalog}/schemas/{schema}/tables/{table}/columns` - Get table columns with metadata
+
+### AI-Powered Features
+- `POST /api/suggest-business-logic` - Get AI suggestions for business logic based on table metadata and sample data
+- `POST /api/suggest-join-conditions` - Get AI-generated join conditions for multiple tables
+- `POST /api/generate-sql` - Generate SQL from natural language business logic
+
+### Query Execution
+- `POST /api/execute-sql` - Execute SQL query against Databricks warehouse
+- `GET /api/query-history` - Retrieve query execution history
+
+### Analytics
+- `GET /api/dashboard-statistics` - Get dashboard metrics
+- `GET /api/llm-costs-by-model` - Get LLM usage costs grouped by model
+
+### System
+- `GET /api/health` - Health check endpoint
+- `GET /api/warehouse-status` - Check Databricks SQL Warehouse status
+- `GET /api/models` - List available AI models
 
 ## Building for Production
 
@@ -103,6 +164,11 @@ This will:
    - Enter your workspace URL (e.g., https://your-workspace.cloud.databricks.com)
    - Enter your personal access token
 
+3. Update `app.yaml` with your configuration:
+   - Set the correct compute resource
+   - Configure environment variables
+   - Set up Databricks secrets for sensitive data
+
 ### Deploy the App
 
 #### Standard Deployment
@@ -116,7 +182,7 @@ The script will:
 - 🔨 Build the frontend
 - 📦 Package the backend
 - 📤 Import to Databricks workspace
-- 🚀 Deploy the app as "text-to-sql"
+- 🚀 Deploy the app as "queryforge"
 - 🌐 Show the app URL
 
 #### Hard Redeploy (Delete and Redeploy)
@@ -130,48 +196,6 @@ This will:
 - ⏳ Wait for deletion to complete
 - 🚀 Deploy a fresh instance
 
-#### Custom App Name/Location
-
-```bash
-python deploy_to_databricks.py --app-name my-custom-name --app-folder /Workspace/Users/user@example.com/my-app
-```
-
-## API Documentation
-
-### Health Check
-
-```http
-GET /api/health
-```
-
-Returns the health status of the API.
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T12:00:00",
-  "environment": "development"
-}
-```
-
-### Sample Data
-
-```http
-GET /api/data
-```
-
-Returns sample metrics data.
-
-**Response:**
-```json
-[
-  {"id": 1, "name": "Query Executions", "value": 1234},
-  {"id": 2, "name": "Tables Analyzed", "value": 567},
-  ...
-]
-```
-
 ## Technology Stack
 
 ### Frontend
@@ -184,54 +208,122 @@ Returns sample metrics data.
 ### Backend
 - **FastAPI** - Python web framework
 - **Uvicorn** - ASGI server
+- **Databricks SQL Connector** - Database connectivity
+- **OpenAI SDK** - For Databricks Foundation Model APIs
 - **Python-dotenv** - Environment management
+
+### AI Models
+- **Meta Llama 4 Maverick** - Primary model for SQL generation
+- **Meta Llama 3.1 70B Instruct** - Alternative high-performance model
+- **DBRX Instruct** - Databricks research model
 
 ### Deployment
 - **Databricks Apps** - Hosting platform
 - **Databricks CLI** - Deployment automation
+- **Unity Catalog** - Data catalog and governance
+
+## Database Schema
+
+The application uses the **`arao.text_to_sql`** schema for audit logging:
+
+### Audit Logs Table
+```sql
+CREATE TABLE IF NOT EXISTS arao.text_to_sql.audit_logs (
+  id STRING,
+  timestamp TIMESTAMP,
+  event_type STRING,
+  user_id STRING,
+  catalog STRING,
+  schema_name STRING,
+  table_name STRING,
+  business_logic STRING,
+  generated_sql STRING,
+  sql_explanation STRING,
+  execution_status STRING,
+  execution_time_ms BIGINT,
+  row_count BIGINT,
+  error_message STRING,
+  model_id STRING,
+  prompt_tokens INT,
+  completion_tokens INT,
+  total_tokens INT,
+  estimated_cost_usd DOUBLE,
+  status STRING
+)
+```
 
 ## Configuration
 
 ### Environment Variables
 
-Backend (`.env`):
+Backend (`.env` for local development):
 ```env
 ENV=development
-PORT=8000
+PORT=8680
 DEBUG=True
-CORS_ORIGINS=http://localhost:5173
+CORS_ORIGINS=http://localhost:5673
+
+# Databricks Configuration
+DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+DATABRICKS_TOKEN=your-token
+DATABRICKS_CATALOG=your_catalog
+DATABRICKS_SCHEMA=your_schema
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-warehouse-id
 ```
 
-Production environment variables are configured in `app.yaml`:
-- `ENV=production`
-- `PORT=8000`
-- `DEBUG=False`
+Production configuration is in `app.yaml` using Databricks secrets:
+```yaml
+env:
+  - name: DATABRICKS_HOST
+    value: "{{secrets/queryforge/databricks_host}}"
+  - name: DATABRICKS_TOKEN
+    value: "{{secrets/queryforge/databricks_token}}"
+```
+
+## Features Deep Dive
+
+### Single Table Query Generator
+1. Select catalog, schema, and table
+2. Choose specific columns
+3. Select AI model
+4. Get AI-suggested business logic questions
+5. Describe your query in natural language
+6. Generate SQL with AI
+7. Execute and view results
+
+### Multi-Table Join Query Generator
+1. Add multiple tables with their columns
+2. Get AI-suggested join conditions based on:
+   - Column names and data types
+   - Table and column descriptions from Unity Catalog
+   - Sample data analysis
+3. Define business logic across all tables
+4. Generate complex JOIN queries automatically
+5. Execute and analyze results
+
+### Query History
+- View all executed queries
+- Filter by status (success/error)
+- See execution time and row counts
+- Track LLM costs per query
+- Rerun previous queries
+
+### Analytics Dashboard
+- Total queries executed
+- Success/failure rates
+- Most queried tables
+- Model usage statistics
+- Cost tracking
 
 ## Troubleshooting
 
-### Port Already in Use
+### Backend Connection Issues
 
-If port 8000 or 5173 is already in use:
-
-**Backend:**
-```bash
-# Change PORT in backend/.env
-PORT=8001
-```
-
-**Frontend:**
-```bash
-# Vite will automatically try the next available port
-# Or specify a different port in vite.config.ts
-```
-
-### Databricks CLI Not Configured
-
-```bash
-databricks configure --token
-```
-
-Enter your workspace URL and personal access token when prompted.
+If metadata fetching times out:
+- Check Databricks SQL Warehouse is running
+- Verify network connectivity to Databricks
+- Ensure proper authentication token
+- Check warehouse HTTP path is correct
 
 ### Frontend Build Fails
 
@@ -242,29 +334,34 @@ npm install
 npm run build
 ```
 
-### Backend Import Error
+### Port Already in Use
 
-Ensure all dependencies are installed:
-```bash
-cd backend
-pip install -r requirements.txt
+Backend (change in `.env`):
+```env
+PORT=8681
+```
+
+Frontend (change in `vite.config.ts`):
+```typescript
+server: {
+  port: 5674,
+  // ...
+}
 ```
 
 ### Deployment Fails
 
-1. Check Databricks CLI is configured:
+1. Check Databricks CLI configuration:
    ```bash
    databricks workspace list /
    ```
 
-2. Verify you have permissions to create apps in your workspace
-
-3. Check the app doesn't already exist:
+2. Verify app doesn't already exist:
    ```bash
    databricks apps list
    ```
 
-4. Try a hard redeploy:
+3. Try hard redeploy:
    ```bash
    python deploy_to_databricks.py --hard-redeploy
    ```
@@ -273,19 +370,35 @@ pip install -r requirements.txt
 
 1. **Make changes** to frontend or backend code
 2. **Test locally** using the local development setup
-3. **Build** using `python build.py`
-4. **Deploy** using `python deploy_to_databricks.py`
+3. **Verify features** work with real Databricks data
+4. **Build** using `python build.py`
+5. **Deploy** using `python deploy_to_databricks.py`
+6. **Monitor** using the analytics dashboard
 
-## Database Schema
+## Performance Optimizations
 
-The application works with the **`arao.text_to_sql`** schema in the FEVM Databricks workspace.
+- **Async query execution** - All database operations use thread pools to prevent blocking
+- **Query timeouts** - 10-second timeouts on metadata fetching, configurable per operation
+- **Connection pooling** - Efficient Databricks SQL connection management
+- **Graceful degradation** - Non-critical features (like LLM costs) fail silently
+- **Sample data limits** - Only fetch first 5 rows for metadata analysis
 
-## Contributing
+## Security Considerations
 
-1. Create a feature branch
-2. Make your changes
-3. Test locally
-4. Submit a pull request
+- **Token Management** - Use Databricks secrets for production deployments
+- **SQL Injection Prevention** - Parameterized queries and input validation
+- **CORS Configuration** - Strict origin policies
+- **Audit Logging** - All queries tracked with user context
+- **Error Handling** - Sensitive information not exposed in error messages
+
+## Future Enhancements
+
+- [ ] Query result export (CSV, JSON, Parquet)
+- [ ] Saved query templates
+- [ ] Collaborative query sharing
+- [ ] Advanced query optimization suggestions
+- [ ] Natural language query editing
+- [ ] Integration with Databricks notebooks
 
 ## License
 
@@ -295,9 +408,10 @@ MIT License - feel free to use this project as a template for your own applicati
 
 For issues or questions:
 - Check the [Troubleshooting](#troubleshooting) section
-- Review the [API Documentation](#api-documentation)
+- Review the [API Documentation](#key-api-endpoints)
 - Check Databricks Apps documentation
+- Review Databricks SQL Connector documentation
 
 ---
 
-Built with ❤️ using React, FastAPI, and Databricks
+Built with ❤️ using React, FastAPI, Databricks Foundation Models, and Unity Catalog

@@ -19,16 +19,25 @@ import AnalyticsIcon from '@mui/icons-material/Analytics'
 import HistoryIcon from '@mui/icons-material/History'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
+import CallMergeIcon from '@mui/icons-material/CallMerge'
 import { SvgIconComponent } from '@mui/icons-material'
 
 interface NavigationItem {
   text: string
   icon: SvgIconComponent
+  children?: Array<{ text: string; icon: SvgIconComponent }>
 }
 
 const navigationItems: NavigationItem[] = [
   { text: 'Dashboard', icon: DashboardIcon },
-  { text: 'SQL Generator', icon: CodeIcon },
+  {
+    text: 'Query Generator',
+    icon: CodeIcon,
+    children: [
+      { text: 'Single Table', icon: CodeIcon },
+      { text: 'Join Query', icon: CallMergeIcon },
+    ]
+  },
   { text: 'Query History', icon: HistoryIcon },
   { text: 'Analytics', icon: AnalyticsIcon },
   // { text: 'Reports', icon: AssessmentIcon },
@@ -65,16 +74,30 @@ export default function NavigationDrawer({
   onSelectPage,
 }: NavigationDrawerProps) {
   const [llmCosts, setLlmCosts] = useState<LLMCostData | null>(null)
+  const [expandedAccordion, setExpandedAccordion] = useState<string | null>('Query Generator')
 
   const fetchLLMCosts = async () => {
     try {
-      const response = await fetch('/api/llm-costs-by-model')
+      // Add timeout to prevent hanging
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
+
+      const response = await fetch('/api/llm-costs-by-model', {
+        signal: controller.signal
+      })
+      clearTimeout(timeoutId)
+
       if (response.ok) {
         const data = await response.json()
         setLlmCosts(data)
       }
     } catch (error) {
-      console.error('Failed to fetch LLM costs:', error)
+      // Silently fail - this is a non-critical feature
+      // Only log in development
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('LLM costs unavailable:', error instanceof Error ? error.message : 'Unknown error')
+      }
+      setLlmCosts(null)
     }
   }
 
@@ -111,8 +134,112 @@ export default function NavigationDrawer({
       <List>
         {navigationItems.map((item) => {
           const Icon = item.icon
-          const isSelected = selectedPage === item.text
 
+          // If item has children, render as accordion (only when drawer is open)
+          if (item.children && open) {
+            const isAnyChildSelected = item.children.some(child => selectedPage === child.text)
+            const isExpanded = expandedAccordion === item.text
+
+            return (
+              <Accordion
+                key={item.text}
+                expanded={isExpanded}
+                onChange={() => setExpandedAccordion(isExpanded ? null : item.text)}
+                disableGutters
+                elevation={0}
+                sx={{
+                  bgcolor: 'transparent',
+                  '&:before': { display: 'none' },
+                  '& .MuiAccordionSummary-root': {
+                    minHeight: 48,
+                    px: 2.5,
+                    '&:hover': {
+                      bgcolor: 'action.hover',
+                    },
+                  },
+                  '& .MuiAccordionDetails-root': {
+                    p: 0,
+                  },
+                }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Icon color={isAnyChildSelected ? 'primary' : 'inherit'} sx={{ mr: 3 }} />
+                    <Typography>{item.text}</Typography>
+                  </Box>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <List disablePadding>
+                    {item.children.map((child) => {
+                      const ChildIcon = child.icon
+                      const isSelected = selectedPage === child.text
+
+                      return (
+                        <ListItem key={child.text} disablePadding>
+                          <ListItemButton
+                            selected={isSelected}
+                            onClick={() => onSelectPage(child.text)}
+                            sx={{
+                              minHeight: 42,
+                              pl: 7,
+                              pr: 2.5,
+                            }}
+                          >
+                            <ListItemIcon
+                              sx={{
+                                minWidth: 0,
+                                mr: 2,
+                                justifyContent: 'center',
+                              }}
+                            >
+                              <ChildIcon color={isSelected ? 'primary' : 'inherit'} fontSize="small" />
+                            </ListItemIcon>
+                            <ListItemText
+                              primary={child.text}
+                              primaryTypographyProps={{
+                                variant: 'body2',
+                              }}
+                            />
+                          </ListItemButton>
+                        </ListItem>
+                      )
+                    })}
+                  </List>
+                </AccordionDetails>
+              </Accordion>
+            )
+          }
+
+          // If item has children but drawer is collapsed, show parent icon only (clicking shows first child)
+          if (item.children && !open) {
+            const isAnyChildSelected = item.children.some(child => selectedPage === child.text)
+            return (
+              <ListItem key={item.text} disablePadding>
+                <ListItemButton
+                  selected={isAnyChildSelected}
+                  onClick={() => onSelectPage(item.children![0].text)}
+                  sx={{
+                    minHeight: 48,
+                    justifyContent: 'center',
+                    px: 2.5,
+                  }}
+                >
+                  <ListItemIcon
+                    sx={{
+                      minWidth: 0,
+                      mr: 'auto',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Icon color={isAnyChildSelected ? 'primary' : 'inherit'} />
+                  </ListItemIcon>
+                </ListItemButton>
+              </ListItem>
+            )
+          }
+
+          // Regular item without children
+          const isSelected = selectedPage === item.text
           return (
             <ListItem key={item.text} disablePadding>
               <ListItemButton
