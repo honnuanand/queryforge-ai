@@ -85,8 +85,32 @@ test.describe('Simple Single Table Query Demo', () => {
     await page.waitForTimeout(3000);
     console.log('✅ Query executed successfully!');
 
-    // Final pause
+    // Scroll to show the complete results table
+    await page.evaluate(() => {
+      const resultsSection = document.querySelector('table');
+      if (resultsSection) {
+        resultsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    await page.waitForTimeout(3000);
+
+    // Show the SQL explanation section by scrolling
+    await page.evaluate(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
     await page.waitForTimeout(2000);
+
+    // Scroll back to show both SQL and results
+    await page.evaluate(() => {
+      const sqlSection = document.querySelector('pre');
+      if (sqlSection) {
+        sqlSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+    await page.waitForTimeout(3000);
+
+    // Final pause to show complete results
+    await page.waitForTimeout(5000);
     console.log('🎉 Demo complete!');
   });
 });

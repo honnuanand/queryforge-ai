@@ -21,8 +21,8 @@ export default defineConfig({
     // Enable video recording for all tests
     video: 'on',
 
-    // Video settings
-    videoSize: { width: 1920, height: 1080 },
+    // Video settings - 2K resolution for better quality
+    videoSize: { width: 2560, height: 1440 },
 
     // Slow down execution for better visibility
     launchOptions: {
@@ -35,8 +35,8 @@ export default defineConfig({
     // Take screenshots at each step
     screenshot: 'on',
 
-    // Viewport size for recording
-    viewport: { width: 1920, height: 1080 },
+    // Viewport size for recording - 2K resolution
+    viewport: { width: 2560, height: 1440 },
   },
 
   projects: [
@@ -44,7 +44,7 @@ export default defineConfig({
       name: 'demo-chrome',
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1920, height: 1080 },
+        viewport: { width: 2560, height: 1440 },
       },
     },
   ],
