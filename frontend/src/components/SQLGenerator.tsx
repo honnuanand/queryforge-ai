@@ -286,10 +286,14 @@ export default function SQLGenerator() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          catalog: selectedCatalog,
-          schema_name: selectedSchema,
-          table: selectedTable,
-          columns: selectedColumns,
+          tables: [
+            {
+              catalog: selectedCatalog,
+              schema_name: selectedSchema,
+              table: selectedTable,
+              columns: selectedColumns,
+            },
+          ],
           business_logic: businessLogic,
           model_id: selectedModel,
         }),
