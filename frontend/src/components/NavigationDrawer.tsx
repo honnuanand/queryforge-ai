@@ -94,7 +94,7 @@ export default function NavigationDrawer({
     } catch (error) {
       // Silently fail - this is a non-critical feature
       // Only log in development
-      if (process.env.NODE_ENV === 'development') {
+      if (import.meta.env.MODE === 'development') {
         console.warn('LLM costs unavailable:', error instanceof Error ? error.message : 'Unknown error')
       }
       setLlmCosts(null)
