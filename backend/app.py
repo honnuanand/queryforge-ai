@@ -535,15 +535,22 @@ Format your response as a simple numbered list (1. 2. 3. 4. 5.), with each sugge
 Do NOT use bullet points, quotes, or JSON format. Just natural language numbered sentences."""
 
         # Call Databricks Foundation Model
-        response = client.chat.completions.create(
-            model=request.model_id,
-            messages=[
+        # Call Databricks Foundation Model for business logic suggestions
+        # Note: Some models like GPT-5 only support default temperature (1.0)
+        completion_params = {
+            "model": request.model_id,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=300,
-            temperature=0.7
-        )
+            "max_tokens": 300,
+        }
+
+        # Only set temperature for models that support it (not GPT-5)
+        if "gpt-5" not in request.model_id.lower():
+            completion_params["temperature"] = 0.7
+
+        response = client.chat.completions.create(**completion_params)
 
         suggestions_text = response.choices[0].message.content.strip()
 
@@ -788,15 +795,22 @@ Format: "t1.column = t2.column" or "t1.col1 = t2.col2 AND t2.col3 = t3.col4"
 """
 
         # Call Databricks Foundation Model
-        response = client.chat.completions.create(
-            model=request.model_id,
-            messages=[
+        # Call Databricks Foundation Model for join condition suggestions
+        # Note: Some models like GPT-5 only support default temperature (1.0)
+        completion_params = {
+            "model": request.model_id,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=300,  # Increased for more complex analysis
-            temperature=0.2  # Very low temperature for deterministic, data-driven decisions
-        )
+            "max_tokens": 300,  # Increased for more complex analysis
+        }
+
+        # Only set temperature for models that support it (not GPT-5)
+        if "gpt-5" not in request.model_id.lower():
+            completion_params["temperature"] = 0.2  # Very low temperature for deterministic, data-driven decisions
+
+        response = client.chat.completions.create(**completion_params)
 
         suggested_condition = response.choices[0].message.content.strip()
 
@@ -965,15 +979,21 @@ EXPLANATION: [A brief 1-2 sentence plain English explanation of what the query d
 SQL: [The complete, well-formatted, executable SQL query here]"""
 
         # Call Databricks Foundation Model
-        response = client.chat.completions.create(
-            model=request.model_id,
-            messages=[
+        # Note: Some models like GPT-5 only support default temperature (1.0)
+        completion_params = {
+            "model": request.model_id,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=2000,  # Increased from 500 to support complex queries with CTEs and window functions
-            temperature=0.3
-        )
+            "max_tokens": 2000,  # Increased from 500 to support complex queries with CTEs and window functions
+        }
+
+        # Only set temperature for models that support it (not GPT-5)
+        if "gpt-5" not in request.model_id.lower():
+            completion_params["temperature"] = 0.3
+
+        response = client.chat.completions.create(**completion_params)
 
         llm_response = response.choices[0].message.content.strip()
 
