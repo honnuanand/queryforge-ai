@@ -831,11 +831,36 @@ Your ENTIRE response should be just the JOIN condition, nothing else."""
         # Clean up the response - remove any surrounding quotes or extra formatting
         suggested_condition = suggested_condition.strip('"').strip("'").strip('`')
 
+        # If LLM outputted analysis instead of just the join condition, extract the actual condition
+        # Look for lines that match the pattern: t1.column = t2.column
+        import re
+        lines = suggested_condition.split('\n')
+
+        # Try to find a line that looks like a join condition (contains t1. and t2. and =)
+        for line in lines:
+            line = line.strip()
+            # Check if line contains table aliases and equals sign (likely a join condition)
+            if re.search(r't\d+\.\w+\s*=\s*t\d+\.\w+', line, re.IGNORECASE):
+                suggested_condition = line
+                break
+
+        # If we still have a multi-line response, take only the first line that's not a heading
+        if '\n' in suggested_condition:
+            for line in lines:
+                line = line.strip()
+                # Skip empty lines and lines that look like headings/analysis
+                if line and not line.startswith('#') and not line.endswith(':') and '=' in line:
+                    suggested_condition = line
+                    break
+
         # Remove common prefixes if present
-        prefixes_to_remove = ["ON ", "WHERE ", "JOIN ON "]
+        prefixes_to_remove = ["ON ", "WHERE ", "JOIN ON ", "```sql", "```"]
         for prefix in prefixes_to_remove:
             if suggested_condition.startswith(prefix):
                 suggested_condition = suggested_condition[len(prefix):].strip()
+
+        # Remove any trailing backticks or markdown
+        suggested_condition = suggested_condition.replace("```", "").strip()
 
         # Extract token usage
         prompt_tokens = response.usage.prompt_tokens if response.usage else 0
