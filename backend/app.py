@@ -790,9 +790,23 @@ EXAMPLES:
 - If Table 1 "user_id" values match Table 2 "id" values → "t1.user_id = t2.id"
 - If you see same IDs appearing in both columns → use those columns for JOIN
 
-Output ONLY the JOIN condition (no SELECT, no FROM, no explanations):
-Format: "t1.column = t2.column" or "t1.col1 = t2.col2 AND t2.col3 = t3.col4"
-"""
+CRITICAL OUTPUT FORMAT - YOU MUST FOLLOW THIS EXACTLY:
+Return ONLY the JOIN condition itself, with NO additional text, analysis, or explanations.
+
+DO NOT:
+- Include any analysis steps in your response
+- Add explanatory text before or after the JOIN condition
+- Write "To determine..." or "Let's follow..." or any preamble
+- Include SELECT, FROM, WHERE, or other SQL keywords
+- Add markdown formatting or code blocks
+- Write multiple sentences or paragraphs
+
+DO:
+- Output EXACTLY one line with just the join condition
+- Use table aliases t1, t2, t3, etc.
+- Format as: "t1.column = t2.column" or "t1.col1 = t2.col2 AND t2.col3 = t3.col4"
+
+Your ENTIRE response should be just the JOIN condition, nothing else."""
 
         # Call Databricks Foundation Model
         # Call Databricks Foundation Model for join condition suggestions
