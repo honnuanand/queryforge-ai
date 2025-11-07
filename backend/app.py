@@ -974,9 +974,21 @@ IMPORTANT GUIDELINES:
 
 Generate a clear, executable SELECT query that directly answers the business question.
 
-Return your response in this EXACT format:
-EXPLANATION: [A brief 1-2 sentence plain English explanation of what the query does and why]
-SQL: [The complete, well-formatted, executable SQL query here]"""
+CRITICAL OUTPUT FORMAT - YOU MUST FOLLOW THIS EXACTLY:
+Return ONLY these two sections in this EXACT format with NO additional text, commentary, or explanations:
+
+EXPLANATION: [Write a brief 1-2 sentence plain English explanation here]
+SQL: [Write the complete SQL query here starting with SELECT or WITH]
+
+DO NOT:
+- Add any text before "EXPLANATION:"
+- Add any text after the SQL query ends
+- Include comments within the SQL query
+- Add explanations between the EXPLANATION and SQL sections
+- Use markdown code blocks or formatting
+- Add any other sections or commentary
+
+The response should contain ONLY the EXPLANATION line and the SQL query, nothing else."""
 
         # Call Databricks Foundation Model
         # Note: Some models like GPT-5 only support default temperature (1.0)
