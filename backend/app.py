@@ -1019,6 +1019,27 @@ SQL: [The complete, well-formatted, executable SQL query here]"""
         # Remove markdown code blocks if present in SQL
         sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
 
+        # Remove any English text that appears before the SELECT statement
+        # Look for the first SELECT and take everything from there
+        select_match = re.search(r'\b(SELECT|WITH)\b', sql_query, re.IGNORECASE)
+        if select_match:
+            sql_query = sql_query[select_match.start():]
+
+        # Remove any trailing English explanations after the SQL
+        # SQL should end with a semicolon or the last valid SQL token
+        # Remove anything that looks like prose after the query
+        lines = sql_query.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip lines that look like English prose (start with capital letter and have spaces but no SQL keywords)
+            if stripped and not stripped[0].isupper() or any(keyword in stripped.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'AND', 'OR', 'ON', 'AS', 'BY', 'WITH', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'UNION', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER', 'CROSS']):
+                cleaned_lines.append(line)
+            elif not stripped:
+                # Keep empty lines for formatting
+                cleaned_lines.append(line)
+        sql_query = '\n'.join(cleaned_lines).strip()
+
         # Validate that SQL query appears complete (basic sanity check)
         # Check for common incomplete patterns
         incomplete_patterns = [
