@@ -764,49 +764,37 @@ You will receive:
 
 Use ALL this information to determine the most accurate JOIN conditions."""
 
-        user_prompt = f"""Analyze these tables with their metadata and sample data to suggest JOIN conditions:
+        user_prompt = f"""Review the following table metadata and sample data. Based on:
+- Column names and descriptions
+- Data types
+- Sample data values
+- Foreign key patterns
+
+Determine the JOIN condition.
 
 {tables_context}
 
-ANALYSIS STEPS:
-1. **READ DESCRIPTIONS**: Review table and column descriptions/comments to understand what each represents
-2. **CHECK DATA TYPES**: Ensure matching columns have compatible data types
-3. **EXAMINE SAMPLE DATA**: Look at the actual values in each column across tables
-4. **IDENTIFY MATCHING VALUES**: Find columns that contain the same or related values
-5. **EXACT COLUMN NAME MATCHES**: Prioritize columns with identical names (e.g., "aircraft_id" in both tables)
-6. **SEMANTIC RELATIONSHIPS**: Use descriptions to identify relationships (e.g., "aircraft identifier" and "aircraft id")
-7. **FOREIGN KEY PATTERNS**: Look for id/foreign_key patterns (e.g., users.id matches orders.user_id)
+CRITICAL: Follow these rules (in priority order):
+1. If columns have the same name AND overlapping values → use those columns
+2. If descriptions indicate relationship AND values overlap → use those columns
+3. If same values appear in different columns → those are join keys
+4. Use foreign key patterns: table1.id = table2.tablename_id
+5. Always use table aliases: t1, t2, t3, etc.
+6. For multiple tables, chain joins: t1.id = t2.fk AND t2.id = t3.fk
 
-CRITICAL RULES (in priority order):
-1. **EXACT MATCHES WITH DATA PROOF**: If columns have the same name AND matching values in sample data, use those!
-2. **SEMANTIC + VALUE MATCH**: If descriptions indicate relationship AND values overlap, use those columns
-3. **VALUE OVERLAP**: If you see the same values appearing in different columns across tables, those are join keys
-4. **Foreign Key Patterns**: table1.id = table2.tablename_id (e.g., users.id = orders.user_id)
-5. **Table Aliases**: Always use t1, t2, t3, etc. as table aliases
-6. **Multiple Tables**: Chain joins logically (e.g., t1.id = t2.fk AND t2.id = t3.fk)
+EXAMPLES OF CORRECT OUTPUT:
+t1.aircraft_id = t2.aircraft_id
+t1.user_id = t2.id
+t1.order_id = t2.id AND t2.customer_id = t3.id
 
-EXAMPLES:
-- If both tables have "aircraft_id" with overlapping values → "t1.aircraft_id = t2.aircraft_id"
-- If Table 1 "user_id" values match Table 2 "id" values → "t1.user_id = t2.id"
-- If you see same IDs appearing in both columns → use those columns for JOIN
+CRITICAL OUTPUT REQUIREMENT:
+Your response must be ONLY the JOIN condition - one single line.
+DO NOT write any analysis, explanation, or preamble.
+DO NOT write "To determine..." or "Let's follow..." or any other text.
+DO NOT use SELECT, FROM, WHERE, or other SQL keywords.
+Just output: t1.column = t2.column
 
-CRITICAL OUTPUT FORMAT - YOU MUST FOLLOW THIS EXACTLY:
-Return ONLY the JOIN condition itself, with NO additional text, analysis, or explanations.
-
-DO NOT:
-- Include any analysis steps in your response
-- Add explanatory text before or after the JOIN condition
-- Write "To determine..." or "Let's follow..." or any preamble
-- Include SELECT, FROM, WHERE, or other SQL keywords
-- Add markdown formatting or code blocks
-- Write multiple sentences or paragraphs
-
-DO:
-- Output EXACTLY one line with just the join condition
-- Use table aliases t1, t2, t3, etc.
-- Format as: "t1.column = t2.column" or "t1.col1 = t2.col2 AND t2.col3 = t3.col4"
-
-Your ENTIRE response should be just the JOIN condition, nothing else."""
+JOIN CONDITION:"""
 
         # Call Databricks Foundation Model
         # Call Databricks Foundation Model for join condition suggestions
