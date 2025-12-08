@@ -745,20 +745,35 @@ export default function SQLGenerator() {
                 </Alert>
               )}
 
-              <Box
-                component="pre"
+              <TextField
+                fullWidth
+                multiline
+                minRows={4}
+                maxRows={12}
+                value={generatedSQL}
+                onChange={(e) => setGeneratedSQL(e.target.value)}
+                variant="outlined"
                 sx={{
-                  p: 2,
-                  bgcolor: '#1e1e1e',
-                  color: '#d4d4d4',
-                  borderRadius: 1,
-                  overflow: 'auto',
-                  fontFamily: 'monospace',
-                  fontSize: '0.875rem',
+                  '& .MuiOutlinedInput-root': {
+                    fontFamily: 'monospace',
+                    fontSize: '0.875rem',
+                    bgcolor: '#1e1e1e',
+                    color: '#d4d4d4',
+                    '& fieldset': {
+                      borderColor: '#444',
+                    },
+                    '&:hover fieldset': {
+                      borderColor: '#666',
+                    },
+                    '&.Mui-focused fieldset': {
+                      borderColor: 'primary.main',
+                    },
+                  },
+                  '& .MuiInputBase-input': {
+                    color: '#d4d4d4',
+                  },
                 }}
-              >
-                {generatedSQL}
-              </Box>
+              />
 
               <Button
                 variant="contained"
