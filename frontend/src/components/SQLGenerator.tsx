@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Container,
   Paper,
   Typography,
   Box,
@@ -46,6 +45,7 @@ import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   TableChart as TableChartIcon,
+  Save as SaveIcon,
 } from '@mui/icons-material'
 
 interface Model {
@@ -92,6 +92,10 @@ export default function SQLGenerator() {
   // Sample data state
   const [sampleData, setSampleData] = useState<{ columns: string[]; rows: any[] } | null>(null)
   const [loadingSampleData, setLoadingSampleData] = useState(false)
+
+  // Save requirement state
+  const [savingRequirement, setSavingRequirement] = useState(false)
+  const [saveSuccess, setSaveSuccess] = useState(false)
 
   // Fetch available models
   useEffect(() => {
@@ -382,13 +386,53 @@ export default function SQLGenerator() {
     }
   }
 
+  const handleSaveRequirement = async () => {
+    if (!selectedCatalog || !selectedSchema || !selectedTable || !businessLogic) {
+      setError('Please fill in all required fields before saving')
+      return
+    }
+
+    setSavingRequirement(true)
+    setSaveSuccess(false)
+    setError(null)
+
+    try {
+      const response = await fetch('/api/save-requirement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          catalog: selectedCatalog,
+          schema_name: selectedSchema,
+          table: selectedTable,
+          columns: selectedColumns,
+          business_logic: businessLogic,
+          generated_sql: generatedSQL || null,
+          model_id: selectedModel,
+        }),
+      })
+
+      const data = await response.json()
+      if (response.ok) {
+        setSaveSuccess(true)
+        // Auto-hide success message after 3 seconds
+        setTimeout(() => setSaveSuccess(false), 3000)
+      } else {
+        setError(data.detail || 'Failed to save requirement')
+      }
+    } catch (err) {
+      setError('Failed to save requirement')
+    } finally {
+      setSavingRequirement(false)
+    }
+  }
+
   const cardVariants = {
     hidden: { opacity: 0, y: 20 },
     visible: { opacity: 1, y: 0 },
   }
 
   return (
-    <Container maxWidth={false} sx={{ mt: 2, mb: 4, px: 3 }}>
+    <Box sx={{ mt: 1, mb: 4 }}>
       <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Box>
           <Typography
@@ -684,24 +728,23 @@ export default function SQLGenerator() {
               }}
             />
             <Tooltip title="AI Assistant: Get suggestions for business logic">
-              <IconButton
-                color="primary"
-                onClick={handleOpenAssistant}
-                disabled={!selectedTable}
-                sx={{
-                  position: 'absolute',
-                  right: 8,
-                  top: 8,
-                  bgcolor: 'background.paper',
-                  boxShadow: 1,
-                  '&:hover': {
-                    bgcolor: 'primary.light',
-                    color: 'white',
-                  },
-                }}
-              >
-                <LightbulbIcon />
-              </IconButton>
+              <span style={{ position: 'absolute', right: 8, top: 8 }}>
+                <IconButton
+                  color="primary"
+                  onClick={handleOpenAssistant}
+                  disabled={!selectedTable}
+                  sx={{
+                    bgcolor: 'background.paper',
+                    boxShadow: 1,
+                    '&:hover': {
+                      bgcolor: 'primary.light',
+                      color: 'white',
+                    },
+                  }}
+                >
+                  <LightbulbIcon />
+                </IconButton>
+              </span>
             </Tooltip>
           </Box>
 
@@ -862,6 +905,47 @@ export default function SQLGenerator() {
         )}
       </AnimatePresence>
 
+      {/* Save Requirement Button */}
+      <Paper
+        elevation={2}
+        sx={{
+          p: 2,
+          mb: 3,
+          bgcolor: 'white',
+          border: '1px solid',
+          borderColor: 'divider',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 2,
+        }}
+      >
+        <Box>
+          <Typography variant="subtitle1" fontWeight="600">
+            Save Requirement
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Store this query requirement for future reference
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {saveSuccess && (
+            <Alert severity="success" sx={{ py: 0 }}>
+              Requirement saved successfully!
+            </Alert>
+          )}
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={savingRequirement ? <CircularProgress size={20} color="inherit" /> : <SaveIcon />}
+            onClick={handleSaveRequirement}
+            disabled={savingRequirement || !selectedTable || !businessLogic}
+          >
+            {savingRequirement ? 'Saving...' : 'Save Requirement'}
+          </Button>
+        </Box>
+      </Paper>
+
       {/* Business Logic Assistant Dialog */}
       <Dialog
         open={assistantDialogOpen}
@@ -930,6 +1014,6 @@ export default function SQLGenerator() {
           <Button onClick={() => setAssistantDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
-    </Container>
+    </Box>
   )
 }

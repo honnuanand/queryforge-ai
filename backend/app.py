@@ -105,6 +105,15 @@ class JoinConditionSuggestionRequest(BaseModel):
     tables: List[TableInfo]
     model_id: str = "databricks-llama-4-maverick"
 
+class SaveRequirementRequest(BaseModel):
+    catalog: str
+    schema_name: str
+    table: str
+    columns: List[str]
+    business_logic: str
+    generated_sql: Optional[str] = None
+    model_id: str = "databricks-llama-4-maverick"
+
 # LLM Cost calculation (approximate pricing per 1M tokens)
 LLM_PRICING = {
     "databricks-llama-4-maverick": {"input": 0.15, "output": 0.60},  # Example pricing
@@ -1239,6 +1248,70 @@ async def execute_sql(request: SQLExecutionRequest):
 
         logger.error(f"Error executing SQL: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to execute SQL: {str(e)}")
+
+@app.post("/api/save-requirement")
+async def save_requirement(request: SaveRequirementRequest):
+    """Save a query requirement to Delta table for future reference"""
+    try:
+        requirement_id = str(uuid.uuid4())
+        timestamp = datetime.now()
+
+        # Create the table if it doesn't exist
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements (
+            requirement_id STRING,
+            catalog STRING,
+            schema_name STRING,
+            table_name STRING,
+            columns ARRAY<STRING>,
+            business_logic STRING,
+            generated_sql STRING,
+            model_id STRING,
+            created_at TIMESTAMP,
+            created_by STRING
+        ) USING DELTA
+        """
+
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                # Create table if not exists
+                cursor.execute(create_table_sql)
+
+                # Insert the requirement
+                columns_array = ",".join([f"'{col}'" for col in request.columns])
+                insert_sql = f"""
+                INSERT INTO {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements
+                (requirement_id, catalog, schema_name, table_name, columns, business_logic, generated_sql, model_id, created_at, created_by)
+                VALUES (
+                    '{requirement_id}',
+                    '{request.catalog}',
+                    '{request.schema_name}',
+                    '{request.table}',
+                    ARRAY({columns_array}),
+                    '{request.business_logic.replace("'", "''")}',
+                    {f"'{request.generated_sql.replace(chr(39), chr(39)+chr(39))}'" if request.generated_sql else 'NULL'},
+                    '{request.model_id}',
+                    '{timestamp.isoformat()}',
+                    'user'
+                )
+                """
+                cursor.execute(insert_sql)
+
+        logger.info(f"Saved requirement {requirement_id}")
+
+        return {
+            "success": True,
+            "requirement_id": requirement_id,
+            "message": "Requirement saved successfully"
+        }
+
+    except Exception as e:
+        logger.error(f"Error saving requirement: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save requirement: {str(e)}")
 
 @app.get("/api/dashboard-statistics")
 async def get_dashboard_statistics():

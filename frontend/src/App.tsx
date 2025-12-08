@@ -87,11 +87,11 @@ const theme = createTheme({
   },
 })
 
-const DRAWER_WIDTH = 240
-const DRAWER_WIDTH_COLLAPSED = 65
+const DRAWER_WIDTH = 200
+const DRAWER_WIDTH_COLLAPSED = 56
 
 function App() {
-  const [drawerOpen, setDrawerOpen] = useState(true)
+  const [drawerOpen, setDrawerOpen] = useState(false)  // Start collapsed since there's only one nav item
   const [selectedPage, setSelectedPage] = useState('SQL Query Generator')
 
   const handleDrawerToggle = () => {
@@ -174,7 +174,7 @@ function App() {
           }}
         >
           <Toolbar />
-          <Box sx={{ flexGrow: 1, p: 3 }}>
+          <Box sx={{ flexGrow: 1, p: 1 }}>
             <MainContent selectedPage={selectedPage} />
           </Box>
 
