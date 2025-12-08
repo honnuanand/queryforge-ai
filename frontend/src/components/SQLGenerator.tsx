@@ -45,6 +45,7 @@ import {
   ExpandMore as ExpandMoreIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
+  TableChart as TableChartIcon,
 } from '@mui/icons-material'
 
 interface Model {
@@ -87,6 +88,10 @@ export default function SQLGenerator() {
   // Warehouse status state
   const [warehouseStatus, setWarehouseStatus] = useState<any>(null)
   const [loadingWarehouseStatus, setLoadingWarehouseStatus] = useState(true)
+
+  // Sample data state
+  const [sampleData, setSampleData] = useState<{ columns: string[]; rows: any[] } | null>(null)
+  const [loadingSampleData, setLoadingSampleData] = useState(false)
 
   // Fetch available models
   useEffect(() => {
@@ -214,6 +219,34 @@ export default function SQLGenerator() {
     }
   }, [selectedCatalog, selectedSchema, selectedTable])
 
+  // Fetch sample data when table changes
+  useEffect(() => {
+    if (selectedCatalog && selectedSchema && selectedTable) {
+      setSampleData(null)
+      setLoadingSampleData(true)
+
+      fetch('/api/execute-sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sql_query: `SELECT * FROM ${selectedCatalog}.${selectedSchema}.${selectedTable} LIMIT 25`
+        }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.columns) {
+            setSampleData({ columns: data.columns, rows: data.rows || [] })
+          }
+          setLoadingSampleData(false)
+        })
+        .catch(() => {
+          setLoadingSampleData(false)
+        })
+    } else {
+      setSampleData(null)
+    }
+  }, [selectedCatalog, selectedSchema, selectedTable])
+
   const handleReset = () => {
     setSelectedCatalog('')
     setSelectedSchema('')
@@ -227,6 +260,7 @@ export default function SQLGenerator() {
     setSchemas([])
     setTables([])
     setColumns([])
+    setSampleData(null)
   }
 
   const handleOpenAssistant = async () => {
@@ -516,6 +550,66 @@ export default function SQLGenerator() {
           </Box>
         </Paper>
       </motion.div>
+
+      {/* Sample Data Accordion - collapsed by default */}
+      {selectedTable && (
+        <Accordion defaultExpanded={false} sx={{ mb: 2 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <TableChartIcon color="primary" fontSize="small" />
+              <Typography variant="subtitle1" fontWeight="600">
+                Sample Data Preview
+              </Typography>
+              {sampleData && (
+                <Chip
+                  label={`${sampleData.rows.length} rows`}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  sx={{ ml: 1 }}
+                />
+              )}
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0 }}>
+            {loadingSampleData ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                <CircularProgress size={24} />
+                <Typography sx={{ ml: 2 }} color="text.secondary">Loading sample data...</Typography>
+              </Box>
+            ) : sampleData && sampleData.columns.length > 0 ? (
+              <TableContainer sx={{ maxHeight: 300 }}>
+                <Table stickyHeader size="small">
+                  <TableHead>
+                    <TableRow>
+                      {sampleData.columns.map((col: string) => (
+                        <TableCell key={col} sx={{ fontWeight: 'bold', bgcolor: 'grey.100', whiteSpace: 'nowrap' }}>
+                          {col}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {sampleData.rows.map((row: any, idx: number) => (
+                      <TableRow key={idx} hover>
+                        {sampleData.columns.map((col: string) => (
+                          <TableCell key={col} sx={{ whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {String(row[col] ?? '')}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Box sx={{ p: 3 }}>
+                <Typography color="text.secondary">No sample data available</Typography>
+              </Box>
+            )}
+          </AccordionDetails>
+        </Accordion>
+      )}
 
       <motion.div
         variants={cardVariants}
