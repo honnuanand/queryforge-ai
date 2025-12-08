@@ -92,7 +92,7 @@ const DRAWER_WIDTH_COLLAPSED = 65
 
 function App() {
   const [drawerOpen, setDrawerOpen] = useState(true)
-  const [selectedPage, setSelectedPage] = useState('Dashboard')
+  const [selectedPage, setSelectedPage] = useState('SQL Query Generator')
 
   const handleDrawerToggle = () => {
     setDrawerOpen(!drawerOpen)
@@ -133,7 +133,7 @@ function App() {
                   opacity: 0.8
                 }
               }}
-              onClick={() => setSelectedPage('Dashboard')}
+              onClick={() => setSelectedPage('SQL Query Generator')}
             >
               QueryForge AI
             </Typography>
