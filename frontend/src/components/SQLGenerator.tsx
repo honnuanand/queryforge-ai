@@ -432,7 +432,7 @@ export default function SQLGenerator() {
   }
 
   return (
-    <Box sx={{ mt: 1, mb: 4 }}>
+    <Box sx={{ mt: 1, mb: 4, overflow: 'hidden', width: '100%', maxWidth: '100%', minWidth: 0, contain: 'inline-size' }}>
       <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Box>
           <Typography
@@ -537,6 +537,7 @@ export default function SQLGenerator() {
             bgcolor: 'white',
             border: '1px solid',
             borderColor: 'divider',
+            overflow: 'hidden',
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
@@ -546,13 +547,14 @@ export default function SQLGenerator() {
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2 }}>
-            <FormControl size="small" variant="outlined">
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <FormControl size="small" variant="outlined" sx={{ flex: 1, minWidth: 0 }}>
               <InputLabel>Catalog</InputLabel>
               <Select
                 value={selectedCatalog}
                 label="Catalog"
                 onChange={(e) => setSelectedCatalog(e.target.value)}
+                sx={{ width: '100%' }}
               >
                 {catalogs.map((catalog) => (
                   <MenuItem key={catalog} value={catalog}>
@@ -562,12 +564,13 @@ export default function SQLGenerator() {
               </Select>
             </FormControl>
 
-            <FormControl size="small" disabled={!selectedCatalog} variant="outlined">
+            <FormControl size="small" disabled={!selectedCatalog} variant="outlined" sx={{ flex: 1, minWidth: 0 }}>
               <InputLabel>Schema</InputLabel>
               <Select
                 value={selectedSchema}
                 label="Schema"
                 onChange={(e) => setSelectedSchema(e.target.value)}
+                sx={{ width: '100%' }}
               >
                 {schemas.map((schema) => (
                   <MenuItem key={schema} value={schema}>
@@ -577,12 +580,13 @@ export default function SQLGenerator() {
               </Select>
             </FormControl>
 
-            <FormControl size="small" disabled={!selectedSchema} variant="outlined">
+            <FormControl size="small" disabled={!selectedSchema} variant="outlined" sx={{ flex: 1, minWidth: 0 }}>
               <InputLabel>Table</InputLabel>
               <Select
                 value={selectedTable}
                 label="Table"
                 onChange={(e) => setSelectedTable(e.target.value)}
+                sx={{ width: '100%' }}
               >
                 {tables.map((table) => (
                   <MenuItem key={table} value={table}>
@@ -597,64 +601,74 @@ export default function SQLGenerator() {
 
       {/* Sample Data Accordion - collapsed by default */}
       {selectedTable && (
-        <Accordion defaultExpanded={false} sx={{ mb: 2, overflow: 'hidden' }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <TableChartIcon color="primary" fontSize="small" />
-              <Typography variant="subtitle1" fontWeight="600">
-                Sample Data Preview
-              </Typography>
-              {sampleData && (
-                <Chip
-                  label={`${sampleData.rows.length} rows`}
-                  size="small"
-                  color="primary"
-                  variant="outlined"
-                  sx={{ ml: 1 }}
-                />
-              )}
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, overflow: 'hidden' }}>
-            {loadingSampleData ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                <CircularProgress size={24} />
-                <Typography sx={{ ml: 2 }} color="text.secondary">Loading sample data...</Typography>
+        <Box sx={{ mb: 2, width: '100%', overflow: 'hidden' }}>
+          <Accordion
+            defaultExpanded={false}
+            sx={{
+              width: '100%',
+              '&.MuiAccordion-root': {
+                overflow: 'hidden',
+              }
+            }}
+          >
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <TableChartIcon color="primary" fontSize="small" />
+                <Typography variant="subtitle1" fontWeight="600">
+                  Sample Data Preview
+                </Typography>
+                {sampleData && (
+                  <Chip
+                    label={`${sampleData.rows.length} rows`}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                )}
               </Box>
-            ) : sampleData && sampleData.columns.length > 0 ? (
-              <Box sx={{ width: '100%', overflow: 'hidden' }}>
-                <TableContainer sx={{ maxHeight: 300, maxWidth: '100%', overflowX: 'auto' }}>
-                  <Table stickyHeader size="small" sx={{ minWidth: 'max-content' }}>
-                    <TableHead>
-                      <TableRow>
-                        {sampleData.columns.map((col: string) => (
-                          <TableCell key={col} sx={{ fontWeight: 'bold', bgcolor: 'grey.100', whiteSpace: 'nowrap' }}>
-                            {col}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {sampleData.rows.map((row: any, idx: number) => (
-                        <TableRow key={idx} hover>
+            </AccordionSummary>
+            <AccordionDetails sx={{ p: 0, width: '100%', overflow: 'hidden' }}>
+              {loadingSampleData ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                  <CircularProgress size={24} />
+                  <Typography sx={{ ml: 2 }} color="text.secondary">Loading sample data...</Typography>
+                </Box>
+              ) : sampleData && sampleData.columns.length > 0 ? (
+                <Box sx={{ width: '100%', overflowX: 'auto', overflowY: 'hidden' }}>
+                  <TableContainer sx={{ maxHeight: 300 }}>
+                    <Table stickyHeader size="small" sx={{ tableLayout: 'fixed', minWidth: 800 }}>
+                      <TableHead>
+                        <TableRow>
                           {sampleData.columns.map((col: string) => (
-                            <TableCell key={col} sx={{ whiteSpace: 'nowrap', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {String(row[col] ?? '')}
+                            <TableCell key={col} sx={{ fontWeight: 'bold', bgcolor: 'grey.100', width: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {col}
                             </TableCell>
                           ))}
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            ) : (
-              <Box sx={{ p: 3 }}>
-                <Typography color="text.secondary">No sample data available</Typography>
-              </Box>
-            )}
-          </AccordionDetails>
-        </Accordion>
+                      </TableHead>
+                      <TableBody>
+                        {sampleData.rows.map((row: any, idx: number) => (
+                          <TableRow key={idx} hover>
+                            {sampleData.columns.map((col: string) => (
+                              <TableCell key={col} sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {String(row[col] ?? '')}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              ) : (
+                <Box sx={{ p: 3 }}>
+                  <Typography color="text.secondary">No sample data available</Typography>
+                </Box>
+              )}
+            </AccordionDetails>
+          </Accordion>
+        </Box>
       )}
 
       <motion.div

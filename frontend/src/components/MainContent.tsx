@@ -1,10 +1,16 @@
 import SQLGenerator from './SQLGenerator'
+import SavedRequirements from './SavedRequirements'
 
 interface MainContentProps {
   selectedPage: string
 }
 
 export default function MainContent({ selectedPage }: MainContentProps) {
-  // Single Table is now the only page
-  return <SQLGenerator />
+  switch (selectedPage) {
+    case 'Saved Requirements':
+      return <SavedRequirements />
+    case 'SQL Query Generator':
+    default:
+      return <SQLGenerator />
+  }
 }

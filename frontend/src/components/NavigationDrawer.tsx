@@ -14,6 +14,7 @@ import Typography from '@mui/material/Typography'
 import Box from '@mui/material/Box'
 import Divider from '@mui/material/Divider'
 import CodeIcon from '@mui/icons-material/Code'
+import StorageIcon from '@mui/icons-material/Storage'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import { SvgIconComponent } from '@mui/icons-material'
@@ -25,6 +26,7 @@ interface NavigationItem {
 
 const navigationItems: NavigationItem[] = [
   { text: 'SQL Query Generator', icon: CodeIcon },
+  { text: 'Saved Requirements', icon: StorageIcon },
 ]
 
 interface NavigationDrawerProps {
@@ -116,13 +118,13 @@ export default function NavigationDrawer({
       <List>
         {navigationItems.map((item) => {
           const Icon = item.icon
-          const isSelected = selectedPage === 'SQL Query Generator' // Always select since we only have one page
+          const isSelected = selectedPage === item.text
 
           return (
             <ListItem key={item.text} disablePadding>
               <ListItemButton
                 selected={isSelected}
-                onClick={() => onSelectPage('SQL Query Generator')}
+                onClick={() => onSelectPage(item.text)}
                 sx={{
                   minHeight: 48,
                   justifyContent: open ? 'initial' : 'center',

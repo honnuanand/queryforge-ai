@@ -1313,6 +1313,83 @@ async def save_requirement(request: SaveRequirementRequest):
         logger.error(f"Error saving requirement: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to save requirement: {str(e)}")
 
+@app.get("/api/saved-requirements")
+async def get_saved_requirements():
+    """Get all saved requirements from Delta table"""
+    try:
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                # Check if table exists first
+                try:
+                    cursor.execute(f"""
+                        SELECT
+                            requirement_id,
+                            catalog,
+                            schema_name,
+                            table_name,
+                            columns,
+                            business_logic,
+                            generated_sql,
+                            model_id,
+                            created_at,
+                            created_by
+                        FROM {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements
+                        ORDER BY created_at DESC
+                        LIMIT 100
+                    """)
+
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = cursor.fetchall()
+
+                    requirements = []
+                    for row in rows:
+                        record = dict(zip(columns, row))
+                        # Convert timestamp to ISO format
+                        if record.get('created_at'):
+                            record['created_at'] = record['created_at'].isoformat()
+                        requirements.append(record)
+
+                    return {
+                        "requirements": requirements,
+                        "total_count": len(requirements)
+                    }
+                except Exception as table_error:
+                    if "TABLE_OR_VIEW_NOT_FOUND" in str(table_error) or "does not exist" in str(table_error).lower():
+                        # Table doesn't exist yet
+                        return {
+                            "requirements": [],
+                            "total_count": 0
+                        }
+                    raise
+    except Exception as e:
+        logger.error(f"Error fetching saved requirements: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch saved requirements: {str(e)}")
+
+@app.delete("/api/saved-requirements/{requirement_id}")
+async def delete_saved_requirement(requirement_id: str):
+    """Delete a saved requirement by ID"""
+    try:
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"""
+                    DELETE FROM {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements
+                    WHERE requirement_id = '{requirement_id}'
+                """)
+
+        logger.info(f"Deleted requirement {requirement_id}")
+        return {"success": True, "message": "Requirement deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting requirement: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete requirement: {str(e)}")
+
 @app.get("/api/dashboard-statistics")
 async def get_dashboard_statistics():
     """Get dashboard statistics from audit logs - using SELECT * approach like query-history"""
