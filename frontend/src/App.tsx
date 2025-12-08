@@ -164,17 +164,16 @@ function App() {
             display: 'flex',
             flexDirection: 'column',
             minHeight: '100vh',
-            width: { sm: `calc(100% - ${drawerOpen ? DRAWER_WIDTH : DRAWER_WIDTH_COLLAPSED}px)` },
-            ml: { sm: `${drawerOpen ? DRAWER_WIDTH : DRAWER_WIDTH_COLLAPSED}px` },
+            ml: `${drawerOpen ? DRAWER_WIDTH : DRAWER_WIDTH_COLLAPSED}px`,
             transition: (theme) =>
-              theme.transitions.create(['margin', 'width'], {
+              theme.transitions.create('margin', {
                 easing: theme.transitions.easing.sharp,
                 duration: theme.transitions.duration.leavingScreen,
               }),
           }}
         >
           <Toolbar />
-          <Box sx={{ flexGrow: 1, p: 1 }}>
+          <Box sx={{ flexGrow: 1, px: 2, py: 1 }}>
             <MainContent selectedPage={selectedPage} />
           </Box>
 

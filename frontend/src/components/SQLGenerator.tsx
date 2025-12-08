@@ -597,7 +597,7 @@ export default function SQLGenerator() {
 
       {/* Sample Data Accordion - collapsed by default */}
       {selectedTable && (
-        <Accordion defaultExpanded={false} sx={{ mb: 2 }}>
+        <Accordion defaultExpanded={false} sx={{ mb: 2, overflow: 'hidden' }}>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <TableChartIcon color="primary" fontSize="small" />
@@ -615,37 +615,39 @@ export default function SQLGenerator() {
               )}
             </Box>
           </AccordionSummary>
-          <AccordionDetails sx={{ p: 0 }}>
+          <AccordionDetails sx={{ p: 0, overflow: 'hidden' }}>
             {loadingSampleData ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
                 <CircularProgress size={24} />
                 <Typography sx={{ ml: 2 }} color="text.secondary">Loading sample data...</Typography>
               </Box>
             ) : sampleData && sampleData.columns.length > 0 ? (
-              <TableContainer sx={{ maxHeight: 300 }}>
-                <Table stickyHeader size="small">
-                  <TableHead>
-                    <TableRow>
-                      {sampleData.columns.map((col: string) => (
-                        <TableCell key={col} sx={{ fontWeight: 'bold', bgcolor: 'grey.100', whiteSpace: 'nowrap' }}>
-                          {col}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {sampleData.rows.map((row: any, idx: number) => (
-                      <TableRow key={idx} hover>
+              <Box sx={{ width: '100%', overflow: 'hidden' }}>
+                <TableContainer sx={{ maxHeight: 300, maxWidth: '100%', overflowX: 'auto' }}>
+                  <Table stickyHeader size="small" sx={{ minWidth: 'max-content' }}>
+                    <TableHead>
+                      <TableRow>
                         {sampleData.columns.map((col: string) => (
-                          <TableCell key={col} sx={{ whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {String(row[col] ?? '')}
+                          <TableCell key={col} sx={{ fontWeight: 'bold', bgcolor: 'grey.100', whiteSpace: 'nowrap' }}>
+                            {col}
                           </TableCell>
                         ))}
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                    </TableHead>
+                    <TableBody>
+                      {sampleData.rows.map((row: any, idx: number) => (
+                        <TableRow key={idx} hover>
+                          {sampleData.columns.map((col: string) => (
+                            <TableCell key={col} sx={{ whiteSpace: 'nowrap', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {String(row[col] ?? '')}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
             ) : (
               <Box sx={{ p: 3 }}>
                 <Typography color="text.secondary">No sample data available</Typography>
@@ -678,29 +680,16 @@ export default function SQLGenerator() {
             </Typography>
           </Box>
 
-          <FormControl fullWidth variant="outlined" sx={{ mb: 3 }}>
+          <FormControl fullWidth variant="outlined" size="small" sx={{ mb: 3 }}>
             <InputLabel>AI Model</InputLabel>
             <Select
               value={selectedModel}
               label="AI Model"
               onChange={(e) => setSelectedModel(e.target.value)}
-              sx={{
-                '& .MuiOutlinedInput-notchedOutline': {
-                  borderColor: 'divider',
-                },
-                '&:hover .MuiOutlinedInput-notchedOutline': {
-                  borderColor: 'primary.main',
-                },
-              }}
             >
               {models.map((model) => (
                 <MenuItem key={model.id} value={model.id}>
-                  <Box>
-                    <Typography variant="body2" fontWeight="500">{model.name}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {model.description}
-                    </Typography>
-                  </Box>
+                  {model.name} - {model.description}
                 </MenuItem>
               ))}
             </Select>
