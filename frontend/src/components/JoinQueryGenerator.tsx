@@ -324,7 +324,8 @@ export default function JoinQueryGenerator() {
 
       const data = await response.json()
       if (response.ok) {
-        setJoinConditions(data.join_condition || '')
+        // Use full_analysis if available (contains step-by-step reasoning), otherwise fall back to join_condition
+        setJoinConditions(data.full_analysis || data.join_condition || '')
       } else {
         setError(data.detail || 'Failed to suggest join conditions')
       }

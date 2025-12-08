@@ -10,6 +10,8 @@ import os
 import openai
 import uuid
 import time
+import json
+import re
 from dotenv import load_dotenv
 from databricks import sql
 
@@ -764,37 +766,47 @@ You will receive:
 
 Use ALL this information to determine the most accurate JOIN conditions."""
 
-        user_prompt = f"""Review the following table metadata and sample data. Based on:
-- Column names and descriptions
-- Data types
-- Sample data values
-- Foreign key patterns
-
-Determine the JOIN condition.
+        user_prompt = f"""Analyze these tables with their metadata and sample data to suggest JOIN conditions:
 
 {tables_context}
 
-CRITICAL: Follow these rules (in priority order):
-1. If columns have the same name AND overlapping values → use those columns
-2. If descriptions indicate relationship AND values overlap → use those columns
-3. If same values appear in different columns → those are join keys
-4. Use foreign key patterns: table1.id = table2.tablename_id
-5. Always use table aliases: t1, t2, t3, etc.
-6. For multiple tables, chain joins: t1.id = t2.fk AND t2.id = t3.fk
+Follow these ANALYSIS STEPS and show your reasoning:
+### Step 1: Review Table and Column Descriptions
+Review table and column descriptions/comments to understand what each represents
 
-EXAMPLES OF CORRECT OUTPUT:
-t1.aircraft_id = t2.aircraft_id
-t1.user_id = t2.id
-t1.order_id = t2.id AND t2.customer_id = t3.id
+### Step 2: Check Data Types
+Ensure matching columns have compatible data types
 
-CRITICAL OUTPUT REQUIREMENT:
-Your response must be ONLY the JOIN condition - one single line.
-DO NOT write any analysis, explanation, or preamble.
-DO NOT write "To determine..." or "Let's follow..." or any other text.
-DO NOT use SELECT, FROM, WHERE, or other SQL keywords.
-Just output: t1.column = t2.column
+### Step 3: Examine Sample Data
+Look at the actual values in each column across tables
 
-JOIN CONDITION:"""
+### Step 4: Identify Matching Values
+Find columns that contain the same or related values
+
+### Step 5: Exact Column Name Matches and Semantic Relationships
+Prioritize columns with identical names (e.g., "aircraft_id" in both tables) or semantic relationships
+
+### Step 6: Foreign Key Patterns
+Look for id/foreign_key patterns (e.g., users.id matches orders.user_id)
+
+CRITICAL RULES (in priority order):
+1. **EXACT MATCHES WITH DATA PROOF**: If columns have the same name AND matching values in sample data, use those!
+2. **SEMANTIC + VALUE MATCH**: If descriptions indicate relationship AND values overlap, use those columns
+3. **VALUE OVERLAP**: If you see the same values appearing in different columns across tables, those are join keys
+4. **Foreign Key Patterns**: table1.id = table2.tablename_id (e.g., users.id = orders.user_id)
+5. **Table Aliases**: Always use t1, t2, t3, etc. as table aliases
+6. **Multiple Tables**: Chain joins logically (e.g., t1.id = t2.fk AND t2.id = t3.fk)
+
+CRITICAL OUTPUT FORMAT:
+After completing your step-by-step analysis above, end your response with:
+
+### RECOMMENDED JOIN CONDITION:
+[Write the join condition here using table aliases t1, t2, etc., such as: t1.aircraft_id = t2.aircraft_id]
+
+EXAMPLES:
+- t1.aircraft_id = t2.aircraft_id
+- t1.user_id = t2.id
+- t1.order_id = t2.id AND t2.customer_id = t3.id"""
 
         # Call Databricks Foundation Model
         # Call Databricks Foundation Model for join condition suggestions
@@ -814,35 +826,31 @@ JOIN CONDITION:"""
 
         response = client.chat.completions.create(**completion_params)
 
-        suggested_condition = response.choices[0].message.content.strip()
+        full_response = response.choices[0].message.content.strip()
 
-        # Clean up the response - remove any surrounding quotes or extra formatting
-        suggested_condition = suggested_condition.strip('"').strip("'").strip('`')
-
-        # If LLM outputted analysis instead of just the join condition, extract the actual condition
-        # Look for lines that match the pattern: t1.column = t2.column
+        # Extract the recommended join condition from the response
+        # Look for the "### RECOMMENDED JOIN CONDITION:" section
         import re
-        lines = suggested_condition.split('\n')
+        condition_match = re.search(r'###\s*RECOMMENDED\s+JOIN\s+CONDITION:\s*\n(.+?)(?:\n###|\n\n|$)', full_response, re.IGNORECASE | re.DOTALL)
 
-        # Try to find a line that looks like a join condition (contains t1. and t2. and =)
-        for line in lines:
-            line = line.strip()
-            # Check if line contains table aliases and equals sign (likely a join condition)
-            if re.search(r't\d+\.\w+\s*=\s*t\d+\.\w+', line, re.IGNORECASE):
-                suggested_condition = line
-                break
-
-        # If we still have a multi-line response, take only the first line that's not a heading
-        if '\n' in suggested_condition:
+        if condition_match:
+            suggested_condition = condition_match.group(1).strip()
+        else:
+            # Fallback: try to find a line that looks like a join condition
+            lines = full_response.split('\n')
+            suggested_condition = ""
             for line in lines:
                 line = line.strip()
-                # Skip empty lines and lines that look like headings/analysis
-                if line and not line.startswith('#') and not line.endswith(':') and '=' in line:
+                # Check if line contains table aliases and equals sign (likely a join condition)
+                if re.search(r't\d+\.\w+\s*=\s*t\d+\.\w+', line, re.IGNORECASE):
                     suggested_condition = line
                     break
 
+        # Clean up the extracted condition
+        suggested_condition = suggested_condition.strip('"').strip("'").strip('`').strip()
+
         # Remove common prefixes if present
-        prefixes_to_remove = ["ON ", "WHERE ", "JOIN ON ", "```sql", "```"]
+        prefixes_to_remove = ["ON ", "WHERE ", "JOIN ON ", "```sql", "```", "-", "*"]
         for prefix in prefixes_to_remove:
             if suggested_condition.startswith(prefix):
                 suggested_condition = suggested_condition[len(prefix):].strip()
@@ -863,12 +871,13 @@ JOIN CONDITION:"""
 
         # Log audit event
         table_names = [f"{t.catalog}.{t.schema_name}.{t.table}" for t in request.tables]
+        all_columns = [col for table in request.tables for col in table.columns]
         await log_audit_event(
             event_type="join_condition_suggestion",
             catalog=request.tables[0].catalog,
             schema_name=request.tables[0].schema_name,
             table_name=f"[JOIN: {' + '.join([t.table for t in request.tables])}]",
-            columns=[col for table in request.tables for col in table.columns],
+            columns=all_columns,  # Pass list directly - Databricks SQL supports arrays
             business_logic=suggested_condition,
             model_id=request.model_id,
             execution_time_ms=execution_time_ms,
@@ -881,6 +890,7 @@ JOIN CONDITION:"""
 
         return {
             "join_condition": suggested_condition,
+            "full_analysis": full_response,
             "model_used": request.model_id
         }
     except HTTPException:
@@ -1086,7 +1096,6 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
             r'[,\s]+$',  # Ends with comma or whitespace
             r'\s+(FROM|WHERE|AND|OR|JOIN|ON|GROUP|ORDER|HAVING)\s*$',  # Ends with SQL keyword
         ]
-        import re
         looks_incomplete = any(re.search(pattern, sql_query, re.IGNORECASE) for pattern in incomplete_patterns)
 
         # Also check for unbalanced parentheses
