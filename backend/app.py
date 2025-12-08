@@ -1390,6 +1390,140 @@ async def delete_saved_requirement(requirement_id: str):
         logger.error(f"Error deleting requirement: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete requirement: {str(e)}")
 
+# Settings endpoints
+class StorageSettingsRequest(BaseModel):
+    storage_catalog: str
+    storage_schema: str
+
+class CreateTableRequest(BaseModel):
+    catalog: str
+    schema: str
+
+# In-memory settings storage (in production, this would be persisted)
+# Initialize with environment defaults
+_storage_settings = {
+    "storage_catalog": DATABRICKS_CATALOG,
+    "storage_schema": DATABRICKS_SCHEMA,
+}
+
+@app.get("/api/settings/storage")
+async def get_storage_settings():
+    """Get current storage settings for saved requirements"""
+    try:
+        # Check if table exists
+        table_exists = False
+        try:
+            with sql.connect(
+                server_hostname=DATABRICKS_HOST.replace("https://", ""),
+                http_path=DATABRICKS_HTTP_PATH,
+                access_token=DATABRICKS_TOKEN
+            ) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"""
+                        DESCRIBE TABLE {_storage_settings['storage_catalog']}.{_storage_settings['storage_schema']}.saved_requirements
+                    """)
+                    table_exists = True
+        except Exception:
+            table_exists = False
+
+        return {
+            "storage_catalog": _storage_settings["storage_catalog"],
+            "storage_schema": _storage_settings["storage_schema"],
+            "table_exists": table_exists,
+        }
+    except Exception as e:
+        logger.error(f"Error getting storage settings: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get storage settings: {str(e)}")
+
+@app.post("/api/settings/storage")
+async def save_storage_settings(request: StorageSettingsRequest):
+    """Save storage settings for saved requirements"""
+    global _storage_settings, DATABRICKS_CATALOG, DATABRICKS_SCHEMA
+    try:
+        # Validate that catalog and schema exist
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                # Check catalog exists
+                cursor.execute(f"SHOW SCHEMAS IN {request.storage_catalog}")
+                schemas = [row[0] for row in cursor.fetchall()]
+                if request.storage_schema not in schemas:
+                    raise HTTPException(status_code=400, detail=f"Schema {request.storage_schema} not found in catalog {request.storage_catalog}")
+
+        # Update settings
+        _storage_settings["storage_catalog"] = request.storage_catalog
+        _storage_settings["storage_schema"] = request.storage_schema
+
+        # Also update the global variables used by other endpoints
+        DATABRICKS_CATALOG = request.storage_catalog
+        DATABRICKS_SCHEMA = request.storage_schema
+
+        logger.info(f"Storage settings updated: {request.storage_catalog}.{request.storage_schema}")
+        return {"success": True, "message": "Storage settings saved successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving storage settings: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save storage settings: {str(e)}")
+
+@app.get("/api/settings/check-table")
+async def check_table_exists(catalog: str, schema: str):
+    """Check if saved_requirements table exists in the specified location"""
+    try:
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                try:
+                    cursor.execute(f"""
+                        DESCRIBE TABLE {catalog}.{schema}.saved_requirements
+                    """)
+                    return {"exists": True}
+                except Exception:
+                    return {"exists": False}
+    except Exception as e:
+        logger.error(f"Error checking table: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to check table: {str(e)}")
+
+@app.post("/api/settings/create-table")
+async def create_saved_requirements_table(request: CreateTableRequest):
+    """Create the saved_requirements Delta table in the specified location"""
+    try:
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                # Create the table
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {request.catalog}.{request.schema}.saved_requirements (
+                        requirement_id STRING NOT NULL,
+                        catalog STRING NOT NULL,
+                        schema_name STRING NOT NULL,
+                        table_name STRING NOT NULL,
+                        columns ARRAY<STRING>,
+                        business_logic STRING,
+                        generated_sql STRING,
+                        model_id STRING,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+                        created_by STRING DEFAULT 'system'
+                    )
+                    USING DELTA
+                    COMMENT 'Stores saved SQL query requirements'
+                """)
+
+        logger.info(f"Created saved_requirements table in {request.catalog}.{request.schema}")
+        return {"success": True, "message": f"Table created successfully at {request.catalog}.{request.schema}.saved_requirements"}
+    except Exception as e:
+        logger.error(f"Error creating table: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create table: {str(e)}")
+
 @app.get("/api/dashboard-statistics")
 async def get_dashboard_statistics():
     """Get dashboard statistics from audit logs - using SELECT * approach like query-history"""

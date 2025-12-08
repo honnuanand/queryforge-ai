@@ -15,6 +15,7 @@ import Box from '@mui/material/Box'
 import Divider from '@mui/material/Divider'
 import CodeIcon from '@mui/icons-material/Code'
 import StorageIcon from '@mui/icons-material/Storage'
+import SettingsIcon from '@mui/icons-material/Settings'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import { SvgIconComponent } from '@mui/icons-material'
@@ -27,6 +28,7 @@ interface NavigationItem {
 const navigationItems: NavigationItem[] = [
   { text: 'SQL Query Generator', icon: CodeIcon },
   { text: 'Saved Requirements', icon: StorageIcon },
+  { text: 'Settings', icon: SettingsIcon },
 ]
 
 interface NavigationDrawerProps {
