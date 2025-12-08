@@ -20,7 +20,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  OutlinedInput,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -191,7 +190,7 @@ export default function SQLGenerator() {
     }
   }, [selectedCatalog, selectedSchema])
 
-  // Fetch columns when table changes
+  // Fetch columns when table changes and auto-select all columns
   useEffect(() => {
     if (selectedCatalog && selectedSchema && selectedTable) {
       setColumns([])
@@ -202,6 +201,8 @@ export default function SQLGenerator() {
         .then(data => {
           if (data && data.columns && Array.isArray(data.columns)) {
             setColumns(data.columns)
+            // Auto-select all columns
+            setSelectedColumns(data.columns.map((col: Column) => col.name))
           } else {
             setColumns([])
           }
@@ -229,8 +230,8 @@ export default function SQLGenerator() {
   }
 
   const handleOpenAssistant = async () => {
-    if (!selectedCatalog || !selectedSchema || !selectedTable || selectedColumns.length === 0) {
-      setError('Please select catalog, schema, table, and columns first')
+    if (!selectedCatalog || !selectedSchema || !selectedTable) {
+      setError('Please select catalog, schema, and table first')
       return
     }
 
@@ -270,7 +271,7 @@ export default function SQLGenerator() {
   }
 
   const handleGenerateSQL = async () => {
-    if (!selectedCatalog || !selectedSchema || !selectedTable || selectedColumns.length === 0 || !businessLogic) {
+    if (!selectedCatalog || !selectedSchema || !selectedTable || !businessLogic) {
       setError('Please fill in all required fields')
       return
     }
@@ -353,7 +354,7 @@ export default function SQLGenerator() {
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth={false} sx={{ mt: 2, mb: 4, px: 3 }}>
       <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Box>
           <Typography
@@ -453,35 +454,27 @@ export default function SQLGenerator() {
         <Paper
           elevation={2}
           sx={{
-            p: 3,
-            mb: 3,
+            p: 2,
+            mb: 2,
             bgcolor: 'white',
             border: '1px solid',
             borderColor: 'divider',
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-            <DatabaseIcon color="primary" />
-            <Typography variant="h6" fontWeight="600" color="text.primary">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+            <DatabaseIcon color="primary" fontSize="small" />
+            <Typography variant="subtitle1" fontWeight="600" color="text.primary">
               1. Select Data Source
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, mt: 2 }}>
-            <FormControl fullWidth variant="outlined">
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2 }}>
+            <FormControl size="small" variant="outlined">
               <InputLabel>Catalog</InputLabel>
               <Select
                 value={selectedCatalog}
                 label="Catalog"
                 onChange={(e) => setSelectedCatalog(e.target.value)}
-                sx={{
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'divider',
-                  },
-                  '&:hover .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'primary.main',
-                  },
-                }}
               >
                 {catalogs.map((catalog) => (
                   <MenuItem key={catalog} value={catalog}>
@@ -491,20 +484,12 @@ export default function SQLGenerator() {
               </Select>
             </FormControl>
 
-            <FormControl fullWidth disabled={!selectedCatalog} variant="outlined">
+            <FormControl size="small" disabled={!selectedCatalog} variant="outlined">
               <InputLabel>Schema</InputLabel>
               <Select
                 value={selectedSchema}
                 label="Schema"
                 onChange={(e) => setSelectedSchema(e.target.value)}
-                sx={{
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'divider',
-                  },
-                  '&:hover .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'primary.main',
-                  },
-                }}
               >
                 {schemas.map((schema) => (
                   <MenuItem key={schema} value={schema}>
@@ -514,60 +499,16 @@ export default function SQLGenerator() {
               </Select>
             </FormControl>
 
-            <FormControl fullWidth disabled={!selectedSchema} variant="outlined">
+            <FormControl size="small" disabled={!selectedSchema} variant="outlined">
               <InputLabel>Table</InputLabel>
               <Select
                 value={selectedTable}
                 label="Table"
                 onChange={(e) => setSelectedTable(e.target.value)}
-                sx={{
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'divider',
-                  },
-                  '&:hover .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'primary.main',
-                  },
-                }}
               >
                 {tables.map((table) => (
                   <MenuItem key={table} value={table}>
                     {table}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-
-            <FormControl fullWidth disabled={!selectedTable || columns.length === 0} variant="outlined">
-              <InputLabel>Columns (Select Multiple)</InputLabel>
-              <Select
-                multiple
-                value={selectedColumns}
-                onChange={(e) => setSelectedColumns(e.target.value as string[])}
-                input={<OutlinedInput label="Columns (Select Multiple)" />}
-                renderValue={(selected) => (
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                    {selected.map((value) => (
-                      <Chip key={value} label={value} size="small" color="primary" variant="outlined" />
-                    ))}
-                  </Box>
-                )}
-                sx={{
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'divider',
-                  },
-                  '&:hover .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'primary.main',
-                  },
-                }}
-              >
-                {columns.map((column) => (
-                  <MenuItem key={column.name} value={column.name}>
-                    <Box>
-                      <Typography variant="body2">{column.name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {column.type}
-                      </Typography>
-                    </Box>
                   </MenuItem>
                 ))}
               </Select>
@@ -652,7 +593,7 @@ export default function SQLGenerator() {
               <IconButton
                 color="primary"
                 onClick={handleOpenAssistant}
-                disabled={!selectedTable || selectedColumns.length === 0}
+                disabled={!selectedTable}
                 sx={{
                   position: 'absolute',
                   right: 8,
@@ -675,7 +616,7 @@ export default function SQLGenerator() {
             size="large"
             startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <GenerateIcon />}
             onClick={handleGenerateSQL}
-            disabled={loading || !selectedTable || selectedColumns.length === 0 || !businessLogic}
+            disabled={loading || !selectedTable || !businessLogic}
             fullWidth
             sx={{
               py: 1.5,
