@@ -357,7 +357,21 @@ async def list_tables(catalog_name: str, schema_name: str):
                 tables = [row[1] for row in cursor.fetchall()]  # row[1] is table name
                 return {"tables": tables}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list tables: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error listing tables: {error_msg}")
+
+        if "SCHEMA_NOT_FOUND" in error_msg or ("schema" in error_msg.lower() and "cannot be found" in error_msg.lower()):
+            raise HTTPException(status_code=404, detail=f"Schema '{schema_name}' not found in catalog '{catalog_name}'. You may not have access to this schema.")
+        elif "CATALOG_NOT_FOUND" in error_msg or ("catalog" in error_msg.lower() and "cannot be found" in error_msg.lower()):
+            raise HTTPException(status_code=404, detail=f"Catalog '{catalog_name}' not found. You may not have access to this catalog.")
+        elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower() or "ACCESS_DENIED" in error_msg:
+            raise HTTPException(status_code=403, detail=f"Permission denied: You don't have access to {catalog_name}.{schema_name}")
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            raise HTTPException(status_code=504, detail="Request timed out. Please try again.")
+        elif "connection" in error_msg.lower():
+            raise HTTPException(status_code=503, detail="Unable to connect to Databricks. Please try again.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to list tables: {error_msg}")
 
 @app.get("/api/catalogs/{catalog_name}/schemas/{schema_name}/tables/{table_name}/columns")
 async def list_columns(catalog_name: str, schema_name: str, table_name: str):
@@ -374,7 +388,24 @@ async def list_columns(catalog_name: str, schema_name: str, table_name: str):
                           for row in cursor.fetchall()]
                 return {"columns": columns}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list columns: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error listing columns: {error_msg}")
+
+        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
+        if "TABLE_OR_VIEW_NOT_FOUND" in error_msg or ("table" in error_msg.lower() and "cannot be found" in error_msg.lower()):
+            raise HTTPException(status_code=404, detail=f"Table '{full_table_name}' not found. You may not have access to this table.")
+        elif "SCHEMA_NOT_FOUND" in error_msg or ("schema" in error_msg.lower() and "cannot be found" in error_msg.lower()):
+            raise HTTPException(status_code=404, detail=f"Schema '{schema_name}' not found in catalog '{catalog_name}'. You may not have access to this schema.")
+        elif "CATALOG_NOT_FOUND" in error_msg or ("catalog" in error_msg.lower() and "cannot be found" in error_msg.lower()):
+            raise HTTPException(status_code=404, detail=f"Catalog '{catalog_name}' not found. You may not have access to this catalog.")
+        elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower() or "ACCESS_DENIED" in error_msg:
+            raise HTTPException(status_code=403, detail=f"Permission denied: You don't have access to {full_table_name}")
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            raise HTTPException(status_code=504, detail="Request timed out. Please try again.")
+        elif "connection" in error_msg.lower():
+            raise HTTPException(status_code=503, detail="Unable to connect to Databricks. Please try again.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to list columns: {error_msg}")
 
 @app.post("/api/suggest-business-logic")
 async def suggest_business_logic(request: BusinessLogicSuggestionRequest):
@@ -1397,7 +1428,7 @@ class StorageSettingsRequest(BaseModel):
 
 class CreateTableRequest(BaseModel):
     catalog: str
-    schema: str
+    schema_name: str
 
 # In-memory settings storage (in production, this would be persisted)
 # Initialize with environment defaults
@@ -1487,12 +1518,22 @@ async def check_table_exists(catalog: str, schema: str):
                 except Exception:
                     return {"exists": False}
     except Exception as e:
-        logger.error(f"Error checking table: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to check table: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error checking table: {error_msg}", exc_info=True)
+
+        # Return user-friendly error messages
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            raise HTTPException(status_code=504, detail="Request timed out. The Databricks warehouse may be starting up. Please try again in a few moments.")
+        elif "connection" in error_msg.lower():
+            raise HTTPException(status_code=503, detail="Unable to connect to Databricks. Please check your network connection and try again.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to check table: {error_msg}")
 
 @app.post("/api/settings/create-table")
 async def create_saved_requirements_table(request: CreateTableRequest):
     """Create the saved_requirements Delta table in the specified location"""
+    service_principal = "unknown"
+
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
@@ -1500,9 +1541,18 @@ async def create_saved_requirements_table(request: CreateTableRequest):
             access_token=DATABRICKS_TOKEN
         ) as connection:
             with connection.cursor() as cursor:
+                # Get current user/service principal first
+                try:
+                    cursor.execute("SELECT current_user()")
+                    result = cursor.fetchone()
+                    if result:
+                        service_principal = result[0]
+                except Exception:
+                    pass
+
                 # Create the table
                 cursor.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {request.catalog}.{request.schema}.saved_requirements (
+                    CREATE TABLE IF NOT EXISTS {request.catalog}.{request.schema_name}.saved_requirements (
                         requirement_id STRING NOT NULL,
                         catalog STRING NOT NULL,
                         schema_name STRING NOT NULL,
@@ -1518,11 +1568,185 @@ async def create_saved_requirements_table(request: CreateTableRequest):
                     COMMENT 'Stores saved SQL query requirements'
                 """)
 
-        logger.info(f"Created saved_requirements table in {request.catalog}.{request.schema}")
-        return {"success": True, "message": f"Table created successfully at {request.catalog}.{request.schema}.saved_requirements"}
+        logger.info(f"Created saved_requirements table in {request.catalog}.{request.schema_name}")
+        return {"success": True, "message": f"Table created successfully at {request.catalog}.{request.schema_name}.saved_requirements"}
     except Exception as e:
-        logger.error(f"Error creating table: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to create table: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error creating table: {error_msg}", exc_info=True)
+
+        # Build grant suggestions for permission errors
+        grant_suggestions = f"""
+To fix this, ask a catalog admin to run these commands:
+
+-- Grant catalog access
+GRANT USE CATALOG ON CATALOG {request.catalog} TO `{service_principal}`;
+
+-- Grant schema access
+GRANT USE SCHEMA ON SCHEMA {request.catalog}.{request.schema_name} TO `{service_principal}`;
+
+-- Grant ability to create tables in schema
+GRANT CREATE TABLE ON SCHEMA {request.catalog}.{request.schema_name} TO `{service_principal}`;
+"""
+
+        # Return user-friendly error messages with grant suggestions
+        if "SCHEMA_NOT_FOUND" in error_msg or ("Schema" in error_msg and "not found" in error_msg.lower()):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Schema '{request.schema_name}' not found in catalog '{request.catalog}'. This could be a permission issue - you may not have USE CATALOG or USE SCHEMA access.\n{grant_suggestions}"
+            )
+        elif "CATALOG_NOT_FOUND" in error_msg or ("Catalog" in error_msg and "not found" in error_msg.lower()):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Catalog '{request.catalog}' not found. This could be a permission issue - you may not have USE CATALOG access.\n\nTo fix this, ask a catalog admin to run:\nGRANT USE CATALOG ON CATALOG {request.catalog} TO `{service_principal}`;"
+            )
+        elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower() or "ACCESS_DENIED" in error_msg:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permission denied: You don't have permission to create tables in {request.catalog}.{request.schema_name}.\n{grant_suggestions}"
+            )
+        elif "already exists" in error_msg.lower():
+            return {"success": True, "message": f"Table already exists at {request.catalog}.{request.schema_name}.saved_requirements"}
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            raise HTTPException(status_code=504, detail="Request timed out. The Databricks warehouse may be starting up. Please try again in a few moments.")
+        elif "connection" in error_msg.lower():
+            raise HTTPException(status_code=503, detail="Unable to connect to Databricks. Please check your network connection and try again.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to create table: {error_msg}\n{grant_suggestions}")
+
+@app.get("/api/settings/check-permissions")
+async def check_table_permissions(catalog: str, schema: str):
+    """Check if the service principal has required permissions on the saved_requirements table"""
+    try:
+        # Get the service principal identity from the current connection
+        service_principal = "unknown"
+        has_select = False
+        has_insert = False
+        has_delete = False
+
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                # Get current user/service principal
+                try:
+                    cursor.execute("SELECT current_user()")
+                    result = cursor.fetchone()
+                    if result:
+                        service_principal = result[0]
+                except Exception as e:
+                    logger.warning(f"Could not get current user: {e}")
+
+                # Try to check permissions by attempting operations
+                table_name = f"{catalog}.{schema}.saved_requirements"
+
+                # Check SELECT permission
+                try:
+                    cursor.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
+                    has_select = True
+                except Exception:
+                    has_select = False
+
+                # Check INSERT permission by checking grants (can't actually insert without data)
+                # We'll use SHOW GRANTS if available, otherwise try a dry-run approach
+                try:
+                    cursor.execute(f"SHOW GRANTS ON TABLE {table_name}")
+                    grants = cursor.fetchall()
+                    for grant in grants:
+                        grant_str = str(grant).upper()
+                        if service_principal.lower() in str(grant).lower() or 'ALL' in grant_str:
+                            if 'INSERT' in grant_str or 'MODIFY' in grant_str or 'ALL PRIVILEGES' in grant_str or 'ALL' in grant_str:
+                                has_insert = True
+                            if 'DELETE' in grant_str or 'MODIFY' in grant_str or 'ALL PRIVILEGES' in grant_str or 'ALL' in grant_str:
+                                has_delete = True
+                            if 'SELECT' in grant_str or 'ALL PRIVILEGES' in grant_str or 'ALL' in grant_str:
+                                has_select = True
+                except Exception as e:
+                    logger.warning(f"Could not check grants: {e}")
+                    # If we can SELECT, assume we have basic access
+                    # For INSERT/DELETE, we'll optimistically assume they work if SELECT works
+                    if has_select:
+                        has_insert = True
+                        has_delete = True
+
+        return {
+            "service_principal": service_principal,
+            "has_select": has_select,
+            "has_insert": has_insert,
+            "has_delete": has_delete,
+            "has_all_permissions": has_select and has_insert and has_delete
+        }
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error checking permissions: {error_msg}", exc_info=True)
+
+        # Return user-friendly error messages
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            raise HTTPException(status_code=504, detail="Request timed out. The Databricks warehouse may be starting up. Please try again in a few moments.")
+        elif "connection" in error_msg.lower():
+            raise HTTPException(status_code=503, detail="Unable to connect to Databricks. Please check your network connection and try again.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to check permissions: {error_msg}")
+
+class GrantPermissionsRequest(BaseModel):
+    catalog: str
+    schema_name: str
+
+@app.post("/api/settings/grant-permissions")
+async def grant_table_permissions(request: GrantPermissionsRequest):
+    """Grant required permissions on the saved_requirements table to the current service principal"""
+    try:
+        with sql.connect(
+            server_hostname=DATABRICKS_HOST.replace("https://", ""),
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        ) as connection:
+            with connection.cursor() as cursor:
+                # Get current user/service principal
+                cursor.execute("SELECT current_user()")
+                result = cursor.fetchone()
+                service_principal = result[0] if result else None
+
+                if not service_principal:
+                    raise HTTPException(status_code=400, detail="Could not determine current service principal")
+
+                table_name = f"{request.catalog}.{request.schema_name}.saved_requirements"
+
+                # Grant permissions
+                # Note: The user running this needs to have GRANT privileges on the table
+                # For Unity Catalog Delta tables, use SELECT and MODIFY (MODIFY covers INSERT/UPDATE/DELETE)
+                try:
+                    cursor.execute(f"GRANT SELECT, MODIFY ON TABLE {table_name} TO `{service_principal}`")
+                    logger.info(f"Granted permissions on {table_name} to {service_principal}")
+                    return {
+                        "success": True,
+                        "message": f"Permissions granted to {service_principal}",
+                        "service_principal": service_principal
+                    }
+                except Exception as grant_error:
+                    error_msg = str(grant_error)
+                    if "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower() or "INVALID_PARAMETER_VALUE" in error_msg:
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Cannot grant permissions. The current user may not have GRANT privileges. "
+                                   f"Please ask a catalog admin to run: GRANT SELECT, MODIFY ON TABLE {table_name} TO `{service_principal}`"
+                        )
+                    raise
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error granting permissions: {error_msg}", exc_info=True)
+
+        # Return user-friendly error messages
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            raise HTTPException(status_code=504, detail="Request timed out. The Databricks warehouse may be starting up. Please try again in a few moments.")
+        elif "connection" in error_msg.lower():
+            raise HTTPException(status_code=503, detail="Unable to connect to Databricks. Please check your network connection and try again.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to grant permissions: {error_msg}")
 
 @app.get("/api/dashboard-statistics")
 async def get_dashboard_statistics():
@@ -1889,11 +2113,11 @@ async def get_llm_costs_by_model():
         import asyncio
         result = await asyncio.wait_for(
             asyncio.to_thread(fetch_costs),
-            timeout=5.0  # 5 second total timeout
+            timeout=12.0  # 12 second total timeout to accommodate slow Databricks queries
         )
         return result
     except asyncio.TimeoutError:
-        logger.warning("LLM costs query timed out after 5 seconds")
+        logger.warning("LLM costs query timed out after 12 seconds")
         return {
             "models": [],
             "total_cost": 0.0,

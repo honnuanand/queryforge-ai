@@ -64,9 +64,9 @@ export default function NavigationDrawer({
 
   const fetchLLMCosts = async () => {
     try {
-      // Add timeout to prevent hanging
+      // Increased timeout to 15 seconds to accommodate slow Databricks queries
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 15000)
 
       const response = await fetch('/api/llm-costs-by-model', {
         signal: controller.signal
@@ -77,12 +77,8 @@ export default function NavigationDrawer({
         const data = await response.json()
         setLlmCosts(data)
       }
-    } catch (error) {
+    } catch {
       // Silently fail - this is a non-critical feature
-      // Only log in development
-      if (import.meta.env.MODE === 'development') {
-        console.warn('LLM costs unavailable:', error instanceof Error ? error.message : 'Unknown error')
-      }
       setLlmCosts(null)
     }
   }

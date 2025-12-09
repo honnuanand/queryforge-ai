@@ -46,6 +46,8 @@ import {
   Error as ErrorIcon,
   TableChart as TableChartIcon,
   Save as SaveIcon,
+  ContentCopy as CopyIcon,
+  Security as SecurityIcon,
 } from '@mui/icons-material'
 
 interface Model {
@@ -96,6 +98,61 @@ export default function SQLGenerator() {
   // Save requirement state
   const [savingRequirement, setSavingRequirement] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
+
+  // Permission error modal state
+  const [permissionModalOpen, setPermissionModalOpen] = useState(false)
+  const [permissionContext, setPermissionContext] = useState<{
+    catalog: string
+    schema?: string
+    table?: string
+    errorMessage: string
+  } | null>(null)
+  const [copiedGrant, setCopiedGrant] = useState(false)
+
+  // Helper function to check if an error is a permission error
+  const isPermissionError = (errorMessage: string): boolean => {
+    const lowerMsg = errorMessage.toLowerCase()
+    return lowerMsg.includes('permission denied') ||
+           lowerMsg.includes('access denied') ||
+           lowerMsg.includes("don't have access")
+  }
+
+  // Helper function to generate grant SQL suggestions
+  const generateGrantSQL = (context: { catalog: string; schema?: string; table?: string }): string => {
+    const { catalog, schema, table } = context
+    let grants = `-- Ask your catalog admin to run these SQL commands:\n\n`
+
+    grants += `-- Grant catalog access\nGRANT USE CATALOG ON CATALOG \`${catalog}\` TO \`<your_user_or_group>\`;\n\n`
+
+    if (schema) {
+      grants += `-- Grant schema access\nGRANT USE SCHEMA ON SCHEMA \`${catalog}\`.\`${schema}\` TO \`<your_user_or_group>\`;\n\n`
+    }
+
+    if (table) {
+      grants += `-- Grant table read access\nGRANT SELECT ON TABLE \`${catalog}\`.\`${schema}\`.\`${table}\` TO \`<your_user_or_group>\`;\n`
+    } else if (schema) {
+      grants += `-- Grant read access to all tables in schema\nGRANT SELECT ON SCHEMA \`${catalog}\`.\`${schema}\` TO \`<your_user_or_group>\`;\n`
+    }
+
+    return grants
+  }
+
+  // Handle permission errors
+  const handlePermissionError = (errorMessage: string, catalog: string, schema?: string, table?: string) => {
+    setPermissionContext({ catalog, schema, table, errorMessage })
+    setPermissionModalOpen(true)
+    setCopiedGrant(false)
+  }
+
+  // Copy grant SQL to clipboard
+  const handleCopyGrant = async () => {
+    if (permissionContext) {
+      const grantSQL = generateGrantSQL(permissionContext)
+      await navigator.clipboard.writeText(grantSQL)
+      setCopiedGrant(true)
+      setTimeout(() => setCopiedGrant(false), 2000)
+    }
+  }
 
   // Fetch available models
   useEffect(() => {
@@ -160,7 +217,13 @@ export default function SQLGenerator() {
       setSelectedColumns([])
 
       fetch(`/api/catalogs/${selectedCatalog}/schemas`)
-        .then(res => res.json())
+        .then(async res => {
+          const data = await res.json()
+          if (!res.ok) {
+            throw new Error(data.detail || 'Failed to load schemas')
+          }
+          return data
+        })
         .then(data => {
           if (data && data.schemas && Array.isArray(data.schemas)) {
             setSchemas(data.schemas)
@@ -168,9 +231,14 @@ export default function SQLGenerator() {
             setSchemas([])
           }
         })
-        .catch(() => {
+        .catch((err) => {
           setSchemas([])
-          setError('Failed to load schemas')
+          const errorMsg = err.message || 'Failed to load schemas'
+          if (isPermissionError(errorMsg)) {
+            handlePermissionError(errorMsg, selectedCatalog)
+          } else {
+            setError(errorMsg)
+          }
         })
     }
   }, [selectedCatalog])
@@ -184,7 +252,13 @@ export default function SQLGenerator() {
       setSelectedColumns([])
 
       fetch(`/api/catalogs/${selectedCatalog}/schemas/${selectedSchema}/tables`)
-        .then(res => res.json())
+        .then(async res => {
+          const data = await res.json()
+          if (!res.ok) {
+            throw new Error(data.detail || 'Failed to load tables')
+          }
+          return data
+        })
         .then(data => {
           if (data && data.tables && Array.isArray(data.tables)) {
             setTables(data.tables)
@@ -192,9 +266,14 @@ export default function SQLGenerator() {
             setTables([])
           }
         })
-        .catch(() => {
+        .catch((err) => {
           setTables([])
-          setError('Failed to load tables')
+          const errorMsg = err.message || 'Failed to load tables'
+          if (isPermissionError(errorMsg)) {
+            handlePermissionError(errorMsg, selectedCatalog, selectedSchema)
+          } else {
+            setError(errorMsg)
+          }
         })
     }
   }, [selectedCatalog, selectedSchema])
@@ -206,7 +285,13 @@ export default function SQLGenerator() {
       setSelectedColumns([])
 
       fetch(`/api/catalogs/${selectedCatalog}/schemas/${selectedSchema}/tables/${selectedTable}/columns`)
-        .then(res => res.json())
+        .then(async res => {
+          const data = await res.json()
+          if (!res.ok) {
+            throw new Error(data.detail || 'Failed to load columns')
+          }
+          return data
+        })
         .then(data => {
           if (data && data.columns && Array.isArray(data.columns)) {
             setColumns(data.columns)
@@ -216,9 +301,14 @@ export default function SQLGenerator() {
             setColumns([])
           }
         })
-        .catch(() => {
+        .catch((err) => {
           setColumns([])
-          setError('Failed to load columns')
+          const errorMsg = err.message || 'Failed to load columns'
+          if (isPermissionError(errorMsg)) {
+            handlePermissionError(errorMsg, selectedCatalog, selectedSchema, selectedTable)
+          } else {
+            setError(errorMsg)
+          }
         })
     }
   }, [selectedCatalog, selectedSchema, selectedTable])
@@ -1015,6 +1105,86 @@ export default function SQLGenerator() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAssistantDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Permission Error Modal */}
+      <Dialog
+        open={permissionModalOpen}
+        onClose={() => setPermissionModalOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SecurityIcon color="error" />
+            <Typography variant="h6">Permission Required</Typography>
+          </Box>
+          <IconButton onClick={() => setPermissionModalOpen(false)}>
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {permissionContext && (
+            <>
+              <Alert severity="error" sx={{ mb: 3 }}>
+                {permissionContext.errorMessage}
+              </Alert>
+
+              <Typography variant="body1" sx={{ mb: 2 }}>
+                You don't have permission to access the requested resource. Please share the following
+                GRANT commands with your catalog administrator to request access:
+              </Typography>
+
+              <Box
+                sx={{
+                  position: 'relative',
+                  bgcolor: '#1e1e1e',
+                  borderRadius: 1,
+                  p: 2,
+                  fontFamily: 'monospace',
+                  fontSize: '0.875rem',
+                  color: '#d4d4d4',
+                  whiteSpace: 'pre-wrap',
+                  overflow: 'auto',
+                  maxHeight: 300,
+                }}
+              >
+                <IconButton
+                  onClick={handleCopyGrant}
+                  sx={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    bgcolor: copiedGrant ? 'success.main' : 'grey.700',
+                    color: 'white',
+                    '&:hover': {
+                      bgcolor: copiedGrant ? 'success.dark' : 'grey.600',
+                    },
+                  }}
+                  size="small"
+                >
+                  {copiedGrant ? <CheckCircleIcon fontSize="small" /> : <CopyIcon fontSize="small" />}
+                </IconButton>
+                {generateGrantSQL(permissionContext)}
+              </Box>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                Replace <code>&lt;your_user_or_group&gt;</code> with your username, email, or group name.
+              </Typography>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            variant="contained"
+            startIcon={copiedGrant ? <CheckCircleIcon /> : <CopyIcon />}
+            onClick={handleCopyGrant}
+            color={copiedGrant ? 'success' : 'primary'}
+          >
+            {copiedGrant ? 'Copied!' : 'Copy GRANT Commands'}
+          </Button>
+          <Button onClick={() => setPermissionModalOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>
