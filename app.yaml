@@ -22,3 +22,5 @@ env:
     value: "text_to_sql"
   - name: DATABRICKS_HTTP_PATH
     value: "/sql/1.0/warehouses/2dc6b7aacc451bcd"
+  - name: REQUIREMENTS_TABLE
+    value: "saved_requirements"

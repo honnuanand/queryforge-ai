@@ -16,6 +16,7 @@ import Divider from '@mui/material/Divider'
 import CodeIcon from '@mui/icons-material/Code'
 import StorageIcon from '@mui/icons-material/Storage'
 import SettingsIcon from '@mui/icons-material/Settings'
+import PersonIcon from '@mui/icons-material/Person'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import { SvgIconComponent } from '@mui/icons-material'
@@ -28,7 +29,7 @@ interface NavigationItem {
 const navigationItems: NavigationItem[] = [
   { text: 'SQL Query Generator', icon: CodeIcon },
   { text: 'Saved Requirements', icon: StorageIcon },
-  { text: 'Settings', icon: SettingsIcon },
+  { text: 'Profile', icon: PersonIcon },
 ]
 
 interface NavigationDrawerProps {
@@ -164,7 +165,7 @@ export default function NavigationDrawer({
         })}
       </List>
 
-      {/* LLM Cost Meter */}
+      {/* LLM Cost Meter - Hidden
       <Box sx={{ mt: 'auto', p: 2 }}>
         {llmCosts && (
           <Accordion
@@ -222,6 +223,7 @@ export default function NavigationDrawer({
           </Accordion>
         )}
       </Box>
+      */}
     </Drawer>
   )
 }

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -33,6 +33,7 @@ DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN", "")
 DATABRICKS_CATALOG = os.getenv("DATABRICKS_CATALOG", "arao")
 DATABRICKS_SCHEMA = os.getenv("DATABRICKS_SCHEMA", "text_to_sql")
 DATABRICKS_HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH", "")
+REQUIREMENTS_TABLE = os.getenv("REQUIREMENTS_TABLE", "saved_requirements")
 
 # Log configuration status (without exposing sensitive data)
 import logging
@@ -41,6 +42,31 @@ logger = logging.getLogger(__name__)
 logger.info(f"DATABRICKS_HOST configured: {bool(DATABRICKS_HOST)}")
 logger.info(f"DATABRICKS_TOKEN configured: {bool(DATABRICKS_TOKEN)}")
 logger.info(f"DATABRICKS_HTTP_PATH configured: {bool(DATABRICKS_HTTP_PATH)}")
+
+def get_access_token(request: Request, allow_fallback: bool = True) -> str:
+    """Get access token for Databricks - OBO token required in production, fallback allowed in dev
+
+    Args:
+        request: FastAPI request object
+        allow_fallback: If False, raises error when OBO token is missing (use for production enforcement)
+    """
+    # Header name is case-insensitive, but check common variations
+    obo_token = request.headers.get("x-forwarded-access-token") or request.headers.get("X-Forwarded-Access-Token")
+    if obo_token:
+        logger.debug("Using OBO token from x-forwarded-access-token header")
+        return obo_token
+
+    # In production (ENV != development), require OBO token
+    if ENV == "production" and not allow_fallback:
+        logger.error("OBO token required but not found in production environment")
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please ensure you are logged in and the app has OBO authorization enabled."
+        )
+
+    # Fallback to service principal for local development
+    logger.debug("Using service principal token (local development)")
+    return DATABRICKS_TOKEN
 
 # Available Foundation Models
 AVAILABLE_MODELS = {
@@ -183,7 +209,7 @@ async def log_audit_event(
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=DATABRICKS_TOKEN  # Use service principal for audit logging
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(insert_sql, (
@@ -227,6 +253,48 @@ async def health_check():
         "environment": ENV
     }
 
+@app.get("/api/profile")
+async def get_user_profile(request: Request):
+    """Get current user profile from OBO token or service principal"""
+    try:
+        # Check for OBO headers
+        obo_token = request.headers.get("x-forwarded-access-token")
+        forwarded_email = request.headers.get("x-forwarded-email")
+        forwarded_user = request.headers.get("x-forwarded-user")
+
+        auth_method = "obo" if obo_token else "service_principal"
+
+        # Get the current user from Databricks
+        access_token = get_access_token(request, allow_fallback=False)
+        current_user = None
+
+        try:
+            with sql.connect(
+                server_hostname=DATABRICKS_HOST.replace("https://", ""),
+                http_path=DATABRICKS_HTTP_PATH,
+                access_token=access_token
+            ) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT current_user()")
+                    result = cursor.fetchone()
+                    current_user = result[0] if result else None
+        except Exception as e:
+            logger.warning(f"Could not fetch current user: {str(e)}")
+
+        return {
+            "auth_method": auth_method,
+            "current_user": current_user,
+            "forwarded_email": forwarded_email,
+            "forwarded_user": forwarded_user,
+            "has_obo_token": bool(obo_token),
+            "databricks_host": DATABRICKS_HOST,
+            "databricks_catalog": DATABRICKS_CATALOG,
+            "databricks_schema": DATABRICKS_SCHEMA,
+        }
+    except Exception as e:
+        logger.error(f"Error getting user profile: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get user profile: {str(e)}")
+
 @app.get("/api/debug/config")
 async def debug_config():
     """Debug endpoint to check configuration"""
@@ -241,7 +309,7 @@ async def debug_config():
     }
 
 @app.get("/api/warehouse-status")
-async def get_warehouse_status():
+async def get_warehouse_status(request: Request):
     """Get SQL warehouse status"""
     try:
         # Extract warehouse ID from HTTP path
@@ -260,7 +328,7 @@ async def get_warehouse_status():
             with sql.connect(
                 server_hostname=DATABRICKS_HOST.replace("https://", ""),
                 http_path=DATABRICKS_HTTP_PATH,
-                access_token=DATABRICKS_TOKEN
+                access_token=get_access_token(request, allow_fallback=False)
             ) as connection:
                 # Connection successful means warehouse is running
                 return {
@@ -291,7 +359,7 @@ async def list_models():
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
 
 @app.get("/api/catalogs")
-async def list_catalogs():
+async def list_catalogs(request: Request):
     """List available catalogs"""
     try:
         # Check if credentials are configured
@@ -312,7 +380,7 @@ async def list_catalogs():
         with sql.connect(
             server_hostname=hostname,
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             logger.info("Connection established successfully")
             with connection.cursor() as cursor:
@@ -328,13 +396,13 @@ async def list_catalogs():
         raise HTTPException(status_code=500, detail=f"Failed to list catalogs: {str(e)}")
 
 @app.get("/api/catalogs/{catalog_name}/schemas")
-async def list_schemas(catalog_name: str):
+async def list_schemas(catalog_name: str, request: Request):
     """List schemas in a catalog"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(f"SHOW SCHEMAS IN {catalog_name}")
@@ -344,13 +412,13 @@ async def list_schemas(catalog_name: str):
         raise HTTPException(status_code=500, detail=f"Failed to list schemas: {str(e)}")
 
 @app.get("/api/catalogs/{catalog_name}/schemas/{schema_name}/tables")
-async def list_tables(catalog_name: str, schema_name: str):
+async def list_tables(catalog_name: str, schema_name: str, request: Request):
     """List tables in a schema"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(f"SHOW TABLES IN {catalog_name}.{schema_name}")
@@ -374,13 +442,13 @@ async def list_tables(catalog_name: str, schema_name: str):
             raise HTTPException(status_code=500, detail=f"Failed to list tables: {error_msg}")
 
 @app.get("/api/catalogs/{catalog_name}/schemas/{schema_name}/tables/{table_name}/columns")
-async def list_columns(catalog_name: str, schema_name: str, table_name: str):
+async def list_columns(catalog_name: str, schema_name: str, table_name: str, request: Request):
     """List columns in a table"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(f"DESCRIBE {catalog_name}.{schema_name}.{table_name}")
@@ -408,7 +476,7 @@ async def list_columns(catalog_name: str, schema_name: str, table_name: str):
             raise HTTPException(status_code=500, detail=f"Failed to list columns: {error_msg}")
 
 @app.post("/api/suggest-business-logic")
-async def suggest_business_logic(request: BusinessLogicSuggestionRequest):
+async def suggest_business_logic(req: BusinessLogicSuggestionRequest, request: Request):
     """Generate business logic suggestions using Databricks Foundation Model"""
     start_time = time.time()
     try:
@@ -428,7 +496,7 @@ async def suggest_business_logic(request: BusinessLogicSuggestionRequest):
                 conn = sql.connect(
                     server_hostname=DATABRICKS_HOST.replace("https://", ""),
                     http_path=DATABRICKS_HTTP_PATH,
-                    access_token=DATABRICKS_TOKEN
+                    access_token=get_access_token(request, allow_fallback=False)
                 )
                 cursor = conn.cursor()
 
@@ -504,14 +572,14 @@ async def suggest_business_logic(request: BusinessLogicSuggestionRequest):
 
         # Create a list of all tables to process
         all_tables = [TableInfo(
-            catalog=request.catalog,
-            schema_name=request.schema_name,
-            table=request.table,
-            columns=request.columns
+            catalog=req.catalog,
+            schema_name=req.schema_name,
+            table=req.table,
+            columns=req.columns
         )]
 
-        if request.additional_tables:
-            all_tables.extend(request.additional_tables)
+        if req.additional_tables:
+            all_tables.extend(req.additional_tables)
 
         # Fetch metadata for all tables with timeout (run in thread pool)
         import asyncio
@@ -580,7 +648,7 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         # Call Databricks Foundation Model for business logic suggestions
         # Note: Some models like GPT-5 only support default temperature (1.0)
         completion_params = {
-            "model": request.model_id,
+            "model": req.model_id,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -589,7 +657,7 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         }
 
         # Only set temperature for models that support it (not GPT-5)
-        if "gpt-5" not in request.model_id.lower():
+        if "gpt-5" not in req.model_id.lower():
             completion_params["temperature"] = 0.7
 
         response = client.chat.completions.create(**completion_params)
@@ -602,7 +670,7 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         total_tokens = response.usage.total_tokens if response.usage else 0
 
         # Calculate cost
-        estimated_cost = calculate_llm_cost(request.model_id, prompt_tokens, completion_tokens)
+        estimated_cost = calculate_llm_cost(req.model_id, prompt_tokens, completion_tokens)
 
         # Parse numbered list format (1. 2. 3. etc.)
         import re
@@ -637,12 +705,12 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         # Log audit event
         await log_audit_event(
             event_type="business_logic_suggestion",
-            catalog=request.catalog,
-            schema_name=request.schema_name,
-            table_name=request.table,
-            columns=request.columns,
+            catalog=req.catalog,
+            schema_name=req.schema_name,
+            table_name=req.table,
+            columns=req.columns,
             business_logic=str(suggestions),
-            model_id=request.model_id,
+            model_id=req.model_id,
             execution_time_ms=execution_time_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -653,7 +721,7 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
 
         return {
             "suggestions": suggestions,
-            "model_used": request.model_id
+            "model_used": req.model_id
         }
     except Exception as e:
         # Calculate execution time for error case
@@ -662,11 +730,11 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         # Log audit event for error
         await log_audit_event(
             event_type="business_logic_suggestion",
-            catalog=request.catalog,
-            schema_name=request.schema_name,
-            table_name=request.table,
-            columns=request.columns,
-            model_id=request.model_id,
+            catalog=req.catalog,
+            schema_name=req.schema_name,
+            table_name=req.table,
+            columns=req.columns,
+            model_id=req.model_id,
             execution_time_ms=execution_time_ms,
             status="error",
             error_message=str(e)
@@ -676,11 +744,11 @@ Do NOT use bullet points, quotes, or JSON format. Just natural language numbered
         raise HTTPException(status_code=500, detail=f"Failed to generate suggestions: {str(e)}")
 
 @app.post("/api/suggest-join-conditions")
-async def suggest_join_conditions(request: JoinConditionSuggestionRequest):
+async def suggest_join_conditions(req: JoinConditionSuggestionRequest, request: Request):
     """Suggest JOIN conditions by analyzing table structures using AI"""
     start_time = time.time()
     try:
-        if len(request.tables) < 2:
+        if len(req.tables) < 2:
             raise HTTPException(status_code=400, detail="At least 2 tables required for join condition suggestions")
 
         # Initialize OpenAI client with Databricks endpoint
@@ -699,7 +767,7 @@ async def suggest_join_conditions(request: JoinConditionSuggestionRequest):
                 conn = sql.connect(
                     server_hostname=DATABRICKS_HOST.replace("https://", ""),
                     http_path=DATABRICKS_HTTP_PATH,
-                    access_token=DATABRICKS_TOKEN
+                    access_token=get_access_token(request, allow_fallback=False)
                 )
                 cursor = conn.cursor()
 
@@ -783,7 +851,7 @@ async def suggest_join_conditions(request: JoinConditionSuggestionRequest):
         import asyncio
         tables_context = ""
         try:
-            for idx, table in enumerate(request.tables, 1):
+            for idx, table in enumerate(req.tables, 1):
                 # Run each table fetch with timeout
                 table_context = await asyncio.wait_for(
                     asyncio.to_thread(fetch_table_context, table, idx),
@@ -852,7 +920,7 @@ EXAMPLES:
         # Call Databricks Foundation Model for join condition suggestions
         # Note: Some models like GPT-5 only support default temperature (1.0)
         completion_params = {
-            "model": request.model_id,
+            "model": req.model_id,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -861,7 +929,7 @@ EXAMPLES:
         }
 
         # Only set temperature for models that support it (not GPT-5)
-        if "gpt-5" not in request.model_id.lower():
+        if "gpt-5" not in req.model_id.lower():
             completion_params["temperature"] = 0.2  # Very low temperature for deterministic, data-driven decisions
 
         response = client.chat.completions.create(**completion_params)
@@ -904,22 +972,22 @@ EXAMPLES:
         total_tokens = response.usage.total_tokens if response.usage else 0
 
         # Calculate cost
-        estimated_cost = calculate_llm_cost(request.model_id, prompt_tokens, completion_tokens)
+        estimated_cost = calculate_llm_cost(req.model_id, prompt_tokens, completion_tokens)
 
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Log audit event
-        table_names = [f"{t.catalog}.{t.schema_name}.{t.table}" for t in request.tables]
-        all_columns = [col for table in request.tables for col in table.columns]
+        table_names = [f"{t.catalog}.{t.schema_name}.{t.table}" for t in req.tables]
+        all_columns = [col for table in req.tables for col in table.columns]
         await log_audit_event(
             event_type="join_condition_suggestion",
-            catalog=request.tables[0].catalog,
-            schema_name=request.tables[0].schema_name,
-            table_name=f"[JOIN: {' + '.join([t.table for t in request.tables])}]",
+            catalog=req.tables[0].catalog,
+            schema_name=req.tables[0].schema_name,
+            table_name=f"[JOIN: {' + '.join([t.table for t in req.tables])}]",
             columns=all_columns,  # Pass list directly - Databricks SQL supports arrays
             business_logic=suggested_condition,
-            model_id=request.model_id,
+            model_id=req.model_id,
             execution_time_ms=execution_time_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -931,7 +999,7 @@ EXAMPLES:
         return {
             "join_condition": suggested_condition,
             "full_analysis": full_response,
-            "model_used": request.model_id
+            "model_used": req.model_id
         }
     except HTTPException:
         raise
@@ -940,13 +1008,13 @@ EXAMPLES:
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Log audit event for error
-        if len(request.tables) > 0:
+        if len(req.tables) > 0:
             await log_audit_event(
                 event_type="join_condition_suggestion",
-                catalog=request.tables[0].catalog,
-                schema_name=request.tables[0].schema_name,
-                table_name=f"[JOIN: {' + '.join([t.table for t in request.tables])}]",
-                model_id=request.model_id,
+                catalog=req.tables[0].catalog,
+                schema_name=req.tables[0].schema_name,
+                table_name=f"[JOIN: {' + '.join([t.table for t in req.tables])}]",
+                model_id=req.model_id,
                 execution_time_ms=execution_time_ms,
                 status="error",
                 error_message=str(e)
@@ -956,7 +1024,7 @@ EXAMPLES:
         raise HTTPException(status_code=500, detail=f"Failed to suggest join conditions: {str(e)}")
 
 @app.post("/api/generate-sql")
-async def generate_sql(request: MultiTableSQLGenerationRequest):
+async def generate_sql(req: MultiTableSQLGenerationRequest, request: Request):
     """Generate SQL query using Databricks Foundation Model (supports multiple tables)"""
     start_time = time.time()
     try:
@@ -967,9 +1035,9 @@ async def generate_sql(request: MultiTableSQLGenerationRequest):
         )
 
         # Build context about the table(s)
-        if len(request.tables) == 1:
+        if len(req.tables) == 1:
             # Single table query
-            table = request.tables[0]
+            table = req.tables[0]
             table_context = f"""
         Table: {table.catalog}.{table.schema_name}.{table.table}
         Selected Columns: {', '.join(table.columns)}
@@ -977,17 +1045,17 @@ async def generate_sql(request: MultiTableSQLGenerationRequest):
         else:
             # Multiple tables - prepare for JOIN query
             table_context = "Tables to JOIN:\n\n"
-            for idx, table in enumerate(request.tables, 1):
+            for idx, table in enumerate(req.tables, 1):
                 table_context += f"""
         Table {idx}: {table.catalog}.{table.schema_name}.{table.table}
         Table {idx} Columns: {', '.join(table.columns)}
 """
 
             # Add explicit join conditions if provided
-            if request.join_conditions:
+            if req.join_conditions:
                 table_context += f"""
         EXPLICIT JOIN CONDITIONS PROVIDED BY USER:
-        {request.join_conditions}
+        {req.join_conditions}
 
         NOTE: Use the explicit JOIN conditions above. The user has specified exactly how these tables should be joined.
         """
@@ -1035,7 +1103,7 @@ QUERY LENGTH:
 {table_context}
 
 Business Logic:
-{request.business_logic}
+{req.business_logic}
 
 IMPORTANT GUIDELINES:
 1. Use ONLY Databricks/Spark SQL syntax (no Oracle, SQL Server, or PostgreSQL syntax)
@@ -1070,7 +1138,7 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
         # Call Databricks Foundation Model
         # Note: Some models like GPT-5 only support default temperature (1.0)
         completion_params = {
-            "model": request.model_id,
+            "model": req.model_id,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -1079,7 +1147,7 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
         }
 
         # Only set temperature for models that support it (not GPT-5)
-        if "gpt-5" not in request.model_id.lower():
+        if "gpt-5" not in req.model_id.lower():
             completion_params["temperature"] = 0.3
 
         response = client.chat.completions.create(**completion_params)
@@ -1162,19 +1230,19 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
         total_tokens = response.usage.total_tokens if response.usage else 0
 
         # Calculate cost
-        estimated_cost = calculate_llm_cost(request.model_id, prompt_tokens, completion_tokens)
+        estimated_cost = calculate_llm_cost(req.model_id, prompt_tokens, completion_tokens)
 
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Log audit event
         # For multi-table queries, log primary table info and note all tables in business_logic
-        primary_table = request.tables[0]
-        audit_business_logic = request.business_logic
+        primary_table = req.tables[0]
+        audit_business_logic = req.business_logic
 
-        if len(request.tables) > 1:
-            table_names = [t.table for t in request.tables]
-            audit_business_logic = f"[JOIN: {' + '.join(table_names)}] {request.business_logic}"
+        if len(req.tables) > 1:
+            table_names = [t.table for t in req.tables]
+            audit_business_logic = f"[JOIN: {' + '.join(table_names)}] {req.business_logic}"
 
         await log_audit_event(
             event_type="sql_generation",
@@ -1184,7 +1252,7 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
             columns=primary_table.columns,
             business_logic=audit_business_logic,
             generated_sql=sql_query,
-            model_id=request.model_id,
+            model_id=req.model_id,
             execution_time_ms=execution_time_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -1196,14 +1264,14 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
         return {
             "sql_query": sql_query,
             "explanation": explanation,
-            "model_used": request.model_id
+            "model_used": req.model_id
         }
     except Exception as e:
         # Calculate execution time for error case
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Log audit event for error
-        primary_table = request.tables[0] if request.tables else None
+        primary_table = req.tables[0] if req.tables else None
         if primary_table:
             await log_audit_event(
                 event_type="sql_generation",
@@ -1211,8 +1279,8 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
                 schema_name=primary_table.schema_name,
                 table_name=primary_table.table,
                 columns=primary_table.columns,
-                business_logic=request.business_logic,
-                model_id=request.model_id,
+                business_logic=req.business_logic,
+                model_id=req.model_id,
                 execution_time_ms=execution_time_ms,
                 status="error",
                 error_message=str(e)
@@ -1221,19 +1289,19 @@ The response should contain ONLY the EXPLANATION line and the SQL query, nothing
         raise HTTPException(status_code=500, detail=f"Failed to generate SQL: {str(e)}")
 
 @app.post("/api/execute-sql")
-async def execute_sql(request: SQLExecutionRequest):
+async def execute_sql(req: SQLExecutionRequest, request: Request):
     """Execute SQL query and return results"""
     start_time = time.time()
     try:
-        logger.info(f"Executing SQL query: {request.sql_query[:100]}...")
+        logger.info(f"Executing SQL query: {req.sql_query[:100]}...")
 
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(request.sql_query)
+                cursor.execute(req.sql_query)
 
                 # Get column names
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -1253,7 +1321,7 @@ async def execute_sql(request: SQLExecutionRequest):
                 # Log audit event
                 await log_audit_event(
                     event_type="sql_execution",
-                    generated_sql=request.sql_query,
+                    generated_sql=req.sql_query,
                     execution_time_ms=execution_time_ms,
                     row_count=len(results),
                     status="success"
@@ -1271,7 +1339,7 @@ async def execute_sql(request: SQLExecutionRequest):
         # Log audit event for error
         await log_audit_event(
             event_type="sql_execution",
-            generated_sql=request.sql_query,
+            generated_sql=req.sql_query,
             execution_time_ms=execution_time_ms,
             status="error",
             error_message=str(e)
@@ -1281,7 +1349,7 @@ async def execute_sql(request: SQLExecutionRequest):
         raise HTTPException(status_code=500, detail=f"Failed to execute SQL: {str(e)}")
 
 @app.post("/api/save-requirement")
-async def save_requirement(request: SaveRequirementRequest):
+async def save_requirement(req: SaveRequirementRequest, request: Request):
     """Save a query requirement to Delta table for future reference"""
     try:
         requirement_id = str(uuid.uuid4())
@@ -1289,7 +1357,7 @@ async def save_requirement(request: SaveRequirementRequest):
 
         # Create the table if it doesn't exist
         create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements (
+        CREATE TABLE IF NOT EXISTS {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{REQUIREMENTS_TABLE} (
             requirement_id STRING,
             catalog STRING,
             schema_name STRING,
@@ -1306,26 +1374,26 @@ async def save_requirement(request: SaveRequirementRequest):
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Create table if not exists
                 cursor.execute(create_table_sql)
 
                 # Insert the requirement
-                columns_array = ",".join([f"'{col}'" for col in request.columns])
+                columns_array = ",".join([f"'{col}'" for col in req.columns])
                 insert_sql = f"""
-                INSERT INTO {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements
+                INSERT INTO {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{REQUIREMENTS_TABLE}
                 (requirement_id, catalog, schema_name, table_name, columns, business_logic, generated_sql, model_id, created_at, created_by)
                 VALUES (
                     '{requirement_id}',
-                    '{request.catalog}',
-                    '{request.schema_name}',
-                    '{request.table}',
+                    '{req.catalog}',
+                    '{req.schema_name}',
+                    '{req.table}',
                     ARRAY({columns_array}),
-                    '{request.business_logic.replace("'", "''")}',
-                    {f"'{request.generated_sql.replace(chr(39), chr(39)+chr(39))}'" if request.generated_sql else 'NULL'},
-                    '{request.model_id}',
+                    '{req.business_logic.replace("'", "''")}',
+                    {f"'{req.generated_sql.replace(chr(39), chr(39)+chr(39))}'" if req.generated_sql else 'NULL'},
+                    '{req.model_id}',
                     '{timestamp.isoformat()}',
                     'user'
                 )
@@ -1345,13 +1413,13 @@ async def save_requirement(request: SaveRequirementRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save requirement: {str(e)}")
 
 @app.get("/api/saved-requirements")
-async def get_saved_requirements():
+async def get_saved_requirements(request: Request):
     """Get all saved requirements from Delta table"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Check if table exists first
@@ -1368,7 +1436,7 @@ async def get_saved_requirements():
                             model_id,
                             created_at,
                             created_by
-                        FROM {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements
+                        FROM {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{REQUIREMENTS_TABLE}
                         ORDER BY created_at DESC
                         LIMIT 100
                     """)
@@ -1401,17 +1469,17 @@ async def get_saved_requirements():
         raise HTTPException(status_code=500, detail=f"Failed to fetch saved requirements: {str(e)}")
 
 @app.delete("/api/saved-requirements/{requirement_id}")
-async def delete_saved_requirement(requirement_id: str):
+async def delete_saved_requirement(requirement_id: str, request: Request):
     """Delete a saved requirement by ID"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(f"""
-                    DELETE FROM {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.saved_requirements
+                    DELETE FROM {DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.{REQUIREMENTS_TABLE}
                     WHERE requirement_id = '{requirement_id}'
                 """)
 
@@ -1438,7 +1506,7 @@ _storage_settings = {
 }
 
 @app.get("/api/settings/storage")
-async def get_storage_settings():
+async def get_storage_settings(request: Request):
     """Get current storage settings for saved requirements"""
     try:
         # Check if table exists
@@ -1447,7 +1515,7 @@ async def get_storage_settings():
             with sql.connect(
                 server_hostname=DATABRICKS_HOST.replace("https://", ""),
                 http_path=DATABRICKS_HTTP_PATH,
-                access_token=DATABRICKS_TOKEN
+                access_token=get_access_token(request, allow_fallback=False)
             ) as connection:
                 with connection.cursor() as cursor:
                     cursor.execute(f"""
@@ -1467,7 +1535,7 @@ async def get_storage_settings():
         raise HTTPException(status_code=500, detail=f"Failed to get storage settings: {str(e)}")
 
 @app.post("/api/settings/storage")
-async def save_storage_settings(request: StorageSettingsRequest):
+async def save_storage_settings(req: StorageSettingsRequest, request: Request):
     """Save storage settings for saved requirements"""
     global _storage_settings, DATABRICKS_CATALOG, DATABRICKS_SCHEMA
     try:
@@ -1475,7 +1543,7 @@ async def save_storage_settings(request: StorageSettingsRequest):
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Check catalog exists
@@ -1501,13 +1569,13 @@ async def save_storage_settings(request: StorageSettingsRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save storage settings: {str(e)}")
 
 @app.get("/api/settings/check-table")
-async def check_table_exists(catalog: str, schema: str):
+async def check_table_exists(catalog: str, schema: str, request: Request):
     """Check if saved_requirements table exists in the specified location"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 try:
@@ -1530,7 +1598,7 @@ async def check_table_exists(catalog: str, schema: str):
             raise HTTPException(status_code=500, detail=f"Failed to check table: {error_msg}")
 
 @app.post("/api/settings/create-table")
-async def create_saved_requirements_table(request: CreateTableRequest):
+async def create_saved_requirements_table(req: CreateTableRequest, request: Request):
     """Create the saved_requirements Delta table in the specified location"""
     service_principal = "unknown"
 
@@ -1538,7 +1606,7 @@ async def create_saved_requirements_table(request: CreateTableRequest):
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Get current user/service principal first
@@ -1552,7 +1620,7 @@ async def create_saved_requirements_table(request: CreateTableRequest):
 
                 # Create the table
                 cursor.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {request.catalog}.{request.schema_name}.saved_requirements (
+                    CREATE TABLE IF NOT EXISTS {req.catalog}.{req.schema_name}.saved_requirements (
                         requirement_id STRING NOT NULL,
                         catalog STRING NOT NULL,
                         schema_name STRING NOT NULL,
@@ -1568,8 +1636,8 @@ async def create_saved_requirements_table(request: CreateTableRequest):
                     COMMENT 'Stores saved SQL query requirements'
                 """)
 
-        logger.info(f"Created saved_requirements table in {request.catalog}.{request.schema_name}")
-        return {"success": True, "message": f"Table created successfully at {request.catalog}.{request.schema_name}.saved_requirements"}
+        logger.info(f"Created saved_requirements table in {req.catalog}.{req.schema_name}")
+        return {"success": True, "message": f"Table created successfully at {req.catalog}.{req.schema_name}.saved_requirements"}
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error creating table: {error_msg}", exc_info=True)
@@ -1579,33 +1647,33 @@ async def create_saved_requirements_table(request: CreateTableRequest):
 To fix this, ask a catalog admin to run these commands:
 
 -- Grant catalog access
-GRANT USE CATALOG ON CATALOG {request.catalog} TO `{service_principal}`;
+GRANT USE CATALOG ON CATALOG {req.catalog} TO `{service_principal}`;
 
 -- Grant schema access
-GRANT USE SCHEMA ON SCHEMA {request.catalog}.{request.schema_name} TO `{service_principal}`;
+GRANT USE SCHEMA ON SCHEMA {req.catalog}.{req.schema_name} TO `{service_principal}`;
 
 -- Grant ability to create tables in schema
-GRANT CREATE TABLE ON SCHEMA {request.catalog}.{request.schema_name} TO `{service_principal}`;
+GRANT CREATE TABLE ON SCHEMA {req.catalog}.{req.schema_name} TO `{service_principal}`;
 """
 
         # Return user-friendly error messages with grant suggestions
         if "SCHEMA_NOT_FOUND" in error_msg or ("Schema" in error_msg and "not found" in error_msg.lower()):
             raise HTTPException(
                 status_code=404,
-                detail=f"Schema '{request.schema_name}' not found in catalog '{request.catalog}'. This could be a permission issue - you may not have USE CATALOG or USE SCHEMA access.\n{grant_suggestions}"
+                detail=f"Schema '{req.schema_name}' not found in catalog '{req.catalog}'. This could be a permission issue - you may not have USE CATALOG or USE SCHEMA access.\n{grant_suggestions}"
             )
         elif "CATALOG_NOT_FOUND" in error_msg or ("Catalog" in error_msg and "not found" in error_msg.lower()):
             raise HTTPException(
                 status_code=404,
-                detail=f"Catalog '{request.catalog}' not found. This could be a permission issue - you may not have USE CATALOG access.\n\nTo fix this, ask a catalog admin to run:\nGRANT USE CATALOG ON CATALOG {request.catalog} TO `{service_principal}`;"
+                detail=f"Catalog '{req.catalog}' not found. This could be a permission issue - you may not have USE CATALOG access.\n\nTo fix this, ask a catalog admin to run:\nGRANT USE CATALOG ON CATALOG {req.catalog} TO `{service_principal}`;"
             )
         elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower() or "ACCESS_DENIED" in error_msg:
             raise HTTPException(
                 status_code=403,
-                detail=f"Permission denied: You don't have permission to create tables in {request.catalog}.{request.schema_name}.\n{grant_suggestions}"
+                detail=f"Permission denied: You don't have permission to create tables in {req.catalog}.{req.schema_name}.\n{grant_suggestions}"
             )
         elif "already exists" in error_msg.lower():
-            return {"success": True, "message": f"Table already exists at {request.catalog}.{request.schema_name}.saved_requirements"}
+            return {"success": True, "message": f"Table already exists at {req.catalog}.{req.schema_name}.saved_requirements"}
         elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
             raise HTTPException(status_code=504, detail="Request timed out. The Databricks warehouse may be starting up. Please try again in a few moments.")
         elif "connection" in error_msg.lower():
@@ -1614,7 +1682,7 @@ GRANT CREATE TABLE ON SCHEMA {request.catalog}.{request.schema_name} TO `{servic
             raise HTTPException(status_code=500, detail=f"Failed to create table: {error_msg}\n{grant_suggestions}")
 
 @app.get("/api/settings/check-permissions")
-async def check_table_permissions(catalog: str, schema: str):
+async def check_table_permissions(catalog: str, schema: str, request: Request):
     """Check if the service principal has required permissions on the saved_requirements table"""
     try:
         # Get the service principal identity from the current connection
@@ -1626,7 +1694,7 @@ async def check_table_permissions(catalog: str, schema: str):
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Get current user/service principal
@@ -1694,13 +1762,13 @@ class GrantPermissionsRequest(BaseModel):
     schema_name: str
 
 @app.post("/api/settings/grant-permissions")
-async def grant_table_permissions(request: GrantPermissionsRequest):
+async def grant_table_permissions(req: GrantPermissionsRequest, request: Request):
     """Grant required permissions on the saved_requirements table to the current service principal"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Get current user/service principal
@@ -1711,7 +1779,7 @@ async def grant_table_permissions(request: GrantPermissionsRequest):
                 if not service_principal:
                     raise HTTPException(status_code=400, detail="Could not determine current service principal")
 
-                table_name = f"{request.catalog}.{request.schema_name}.saved_requirements"
+                table_name = f"{req.catalog}.{req.schema_name}.saved_requirements"
 
                 # Grant permissions
                 # Note: The user running this needs to have GRANT privileges on the table
@@ -1749,13 +1817,13 @@ async def grant_table_permissions(request: GrantPermissionsRequest):
             raise HTTPException(status_code=500, detail=f"Failed to grant permissions: {error_msg}")
 
 @app.get("/api/dashboard-statistics")
-async def get_dashboard_statistics():
+async def get_dashboard_statistics(request: Request):
     """Get dashboard statistics from audit logs - using SELECT * approach like query-history"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Fetch ALL audit log records and aggregate in Python
@@ -1826,13 +1894,13 @@ async def get_dashboard_statistics():
         }
 
 @app.get("/api/query-history")
-async def get_query_history():
+async def get_query_history(request: Request):
     """Get query history with grouped LLM calls and execution details"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Get all events ordered by timestamp ASC for proper grouping
@@ -1976,13 +2044,13 @@ async def get_query_history():
         raise HTTPException(status_code=500, detail=f"Failed to fetch query history: {str(e)}")
 
 @app.get("/api/llm-analytics")
-async def get_llm_analytics():
+async def get_llm_analytics(request: Request):
     """Get detailed LLM analytics per query"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Get per-query LLM costs and details
@@ -2053,7 +2121,7 @@ async def get_llm_analytics():
         raise HTTPException(status_code=500, detail=f"Failed to fetch LLM analytics: {str(e)}")
 
 @app.get("/api/llm-costs-by-model")
-async def get_llm_costs_by_model():
+async def get_llm_costs_by_model(request: Request):
     """Get aggregated LLM costs grouped by model"""
 
     def fetch_costs():
@@ -2062,7 +2130,7 @@ async def get_llm_costs_by_model():
             with sql.connect(
                 server_hostname=DATABRICKS_HOST.replace("https://", ""),
                 http_path=DATABRICKS_HTTP_PATH,
-                access_token=DATABRICKS_TOKEN,
+                access_token=get_access_token(request, allow_fallback=False),
                 _socket_timeout=3  # 3 second socket timeout
             ) as connection:
                 with connection.cursor() as cursor:
@@ -2135,13 +2203,13 @@ async def get_llm_costs_by_model():
         }
 
 @app.get("/api/analytics/llm-usage")
-async def get_llm_usage_analytics():
+async def get_llm_usage_analytics(request: Request):
     """Get detailed LLM usage analytics including most used, most costly, and slowest models"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Most used LLMs
@@ -2187,13 +2255,13 @@ async def get_llm_usage_analytics():
         raise HTTPException(status_code=500, detail=f"Failed to fetch LLM usage analytics: {str(e)}")
 
 @app.get("/api/analytics/top-queries")
-async def get_top_queries_analytics():
+async def get_top_queries_analytics(request: Request):
     """Get analytics about top queries - most costly, slowest, longest execution"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Get query sessions with aggregated metrics
@@ -2257,13 +2325,13 @@ async def get_top_queries_analytics():
         raise HTTPException(status_code=500, detail=f"Failed to fetch top queries analytics: {str(e)}")
 
 @app.get("/api/analytics/summary")
-async def get_analytics_summary():
+async def get_analytics_summary(request: Request):
     """Get comprehensive analytics summary with comparisons and trends"""
     try:
         with sql.connect(
             server_hostname=DATABRICKS_HOST.replace("https://", ""),
             http_path=DATABRICKS_HTTP_PATH,
-            access_token=DATABRICKS_TOKEN
+            access_token=get_access_token(request, allow_fallback=False)
         ) as connection:
             with connection.cursor() as cursor:
                 # Overall statistics with comparisons

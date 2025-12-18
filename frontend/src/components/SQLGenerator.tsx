@@ -1131,59 +1131,19 @@ export default function SQLGenerator() {
                 {permissionContext.errorMessage}
               </Alert>
 
-              <Typography variant="body1" sx={{ mb: 2 }}>
-                You don't have permission to access the requested resource. Please share the following
-                GRANT commands with your catalog administrator to request access:
-              </Typography>
-
-              <Box
-                sx={{
-                  position: 'relative',
-                  bgcolor: '#1e1e1e',
-                  borderRadius: 1,
-                  p: 2,
-                  fontFamily: 'monospace',
-                  fontSize: '0.875rem',
-                  color: '#d4d4d4',
-                  whiteSpace: 'pre-wrap',
-                  overflow: 'auto',
-                  maxHeight: 300,
-                }}
-              >
-                <IconButton
-                  onClick={handleCopyGrant}
-                  sx={{
-                    position: 'absolute',
-                    top: 8,
-                    right: 8,
-                    bgcolor: copiedGrant ? 'success.main' : 'grey.700',
-                    color: 'white',
-                    '&:hover': {
-                      bgcolor: copiedGrant ? 'success.dark' : 'grey.600',
-                    },
-                  }}
-                  size="small"
-                >
-                  {copiedGrant ? <CheckCircleIcon fontSize="small" /> : <CopyIcon fontSize="small" />}
-                </IconButton>
-                {generateGrantSQL(permissionContext)}
-              </Box>
-
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                Replace <code>&lt;your_user_or_group&gt;</code> with your username, email, or group name.
+              <Typography variant="body1">
+                Please contact your administrator to get access to the{' '}
+                <strong>
+                  {permissionContext.catalog}
+                  {permissionContext.schema && `.${permissionContext.schema}`}
+                  {permissionContext.table && `.${permissionContext.table}`}
+                </strong>{' '}
+                {permissionContext.table ? 'table' : permissionContext.schema ? 'schema' : 'catalog'}.
               </Typography>
             </>
           )}
         </DialogContent>
         <DialogActions>
-          <Button
-            variant="contained"
-            startIcon={copiedGrant ? <CheckCircleIcon /> : <CopyIcon />}
-            onClick={handleCopyGrant}
-            color={copiedGrant ? 'success' : 'primary'}
-          >
-            {copiedGrant ? 'Copied!' : 'Copy GRANT Commands'}
-          </Button>
           <Button onClick={() => setPermissionModalOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>

@@ -173,7 +173,7 @@ function App() {
           }}
         >
           <Toolbar />
-          <Box sx={{ flexGrow: 1, px: 2, py: 1 }}>
+          <Box sx={{ flexGrow: 1, px: 1, py: 1 }}>
             <MainContent selectedPage={selectedPage} />
           </Box>
 
