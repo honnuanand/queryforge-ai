@@ -1,3 +1,8 @@
+# Deployment metadata (used by deploy_to_databricks.py, removed before deployment)
+deployment:
+  app_name: "queryforge"
+  profile: "fe-ai"
+
 command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # Allow anonymous access to the app

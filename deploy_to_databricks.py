@@ -2,6 +2,19 @@
 """
 Databricks Deployment Script for QueryForge AI Application
 Handles CLI setup, secrets management, scope selection, and app deployment
+
+Usage:
+    # Deploy using config from app.yaml
+    python deploy_to_databricks.py --skip-secrets
+
+    # Deploy to specific environment
+    python deploy_to_databricks.py --config app.yaml.prod --skip-secrets
+
+    # Override app name and profile
+    python deploy_to_databricks.py --app-name my-app --profile my-profile --skip-secrets
+
+    # Hard redeploy (delete and recreate)
+    python deploy_to_databricks.py --hard-redeploy --skip-secrets
 """
 
 import os
@@ -9,12 +22,14 @@ import sys
 import json
 import subprocess
 import getpass
+import secrets
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 import argparse
 import fnmatch
 import shutil
 import time
+import yaml
 
 @dataclass
 class SecretConfig:
@@ -32,12 +47,23 @@ class ScopeInfo:
     secret_count: int
 
 class DatabricksDeployer:
-    def __init__(self):
+    def __init__(self, profile: str = None, app_name: str = None, config_file: str = None):
         self.workspace_url = None
         self.token = None
         self.user_email = None
-        self.app_name = "queryforge"
-        self.app_folder = None  # Will be auto-detected
+        self.app_name = app_name
+        self.app_folder = None
+        self.profile = profile
+        self.config_file = config_file or "app.yaml"
+
+        # Detect project structure
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.project_root = self._find_project_root()
+        self.backend_dir = os.path.join(self.project_root, "backend")
+        self.frontend_dir = os.path.join(self.project_root, "frontend")
+
+        # Load configuration from app.yaml if not overridden
+        self._load_config_from_yaml()
 
         # Auto-detect workspace info
         self._auto_detect_workspace_info()
@@ -45,11 +71,66 @@ class DatabricksDeployer:
         # Required secrets for the application
         self.required_secrets = [
             SecretConfig("databricks-token", "", "Databricks personal access token"),
-            SecretConfig("databricks-api-url", "", "Databricks workspace URL"),
-            SecretConfig("openai-api-key", "", "OpenAI API key"),
-            SecretConfig("anthropic-api-key", "", "Anthropic API key"),
-            SecretConfig("session-secret", "", "Session secret for FastAPI"),
         ]
+
+        # Selected scope for environment references
+        self.selected_scope = None
+
+    def _find_project_root(self) -> str:
+        """Find project root by looking for app.yaml or frontend directory"""
+        # Check if script is in root or backend
+        if os.path.exists(os.path.join(self.script_dir, "frontend")):
+            return self.script_dir
+        elif os.path.exists(os.path.join(os.path.dirname(self.script_dir), "frontend")):
+            return os.path.dirname(self.script_dir)
+        else:
+            return self.script_dir
+
+    def _load_config_from_yaml(self):
+        """Load app_name and profile from app.yaml deployment section"""
+        config_path = os.path.join(self.project_root, self.config_file)
+
+        if not os.path.exists(config_path):
+            # Try backend directory
+            config_path = os.path.join(self.backend_dir, self.config_file)
+
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+
+                deployment = config.get('deployment', {})
+
+                # Only use config values if not overridden by CLI
+                if not self.app_name and deployment.get('app_name'):
+                    self.app_name = deployment['app_name']
+                    print(f"📋 Using app_name from {self.config_file}: {self.app_name}")
+
+                if not self.profile and deployment.get('profile'):
+                    self.profile = deployment['profile']
+                    print(f"📋 Using profile from {self.config_file}: {self.profile}")
+
+            except Exception as e:
+                print(f"⚠️  Warning: Could not parse {self.config_file}: {e}")
+
+        # Check environment variable as fallback
+        if not self.app_name:
+            self.app_name = os.environ.get('DATABRICKS_APP_NAME')
+            if self.app_name:
+                print(f"📋 Using app_name from DATABRICKS_APP_NAME env var: {self.app_name}")
+
+        # Final validation
+        if not self.app_name:
+            print("❌ ERROR: app_name is required!")
+            print("   Provide via:")
+            print("     1. --app-name CLI argument")
+            print("     2. deployment.app_name in app.yaml")
+            print("     3. DATABRICKS_APP_NAME environment variable")
+            sys.exit(1)
+
+        # Default profile if not set
+        if not self.profile:
+            self.profile = "default"
 
     def _auto_detect_workspace_info(self):
         """Auto-detect workspace URL and user email from Databricks CLI"""
@@ -81,38 +162,53 @@ class DatabricksDeployer:
             if not self.app_folder:
                 self.app_folder = f"/Workspace/Users/YOUR_USER@example.com/{self.app_name}"
 
-    def run_command(self, command: List[str], capture_output: bool = True) -> Tuple[int, str, str]:
+    def run_command(self, command: List[str], capture_output: bool = True, cwd: str = None, use_profile: bool = True) -> Tuple[int, str, str]:
         """Run a shell command and return exit code, stdout, stderr"""
         try:
+            # Add profile flag for databricks commands
+            if use_profile and command and command[0] == "databricks" and self.profile:
+                command = command + ["--profile", self.profile]
+
             result = subprocess.run(
                 command,
                 capture_output=capture_output,
                 text=True,
-                check=False
+                check=False,
+                cwd=cwd
             )
             return result.returncode, result.stdout, result.stderr
         except Exception as e:
             return 1, "", str(e)
 
+    def run_shell_command(self, command: str, cwd: str = None) -> bool:
+        """Run a shell command and return success status"""
+        print(f"Running: {command}")
+        result = subprocess.run(command, shell=True, cwd=cwd)
+        return result.returncode == 0
+
     def check_databricks_cli(self) -> bool:
         """Check if Databricks CLI is installed and configured"""
         print("🔍 Checking Databricks CLI...")
 
-        # Check if databricks command exists
-        exit_code, stdout, stderr = self.run_command(["databricks", "--version"])
+        # Check if databricks command exists (don't add profile for version check)
+        exit_code, stdout, stderr = self.run_command(["databricks", "--version"], use_profile=False)
         if exit_code != 0:
             print("❌ Databricks CLI not found. Please install it first:")
             print("   pip install databricks-cli")
             return False
 
-        # Check if configured
+        # Check if configured (use profile here)
         exit_code, stdout, stderr = self.run_command(["databricks", "workspace", "list", "/"])
         if exit_code != 0:
-            print("❌ Databricks CLI not configured. Please run:")
-            print("   databricks configure --token")
+            print(f"❌ Databricks CLI not configured for profile '{self.profile}'. Please run:")
+            print(f"   databricks auth login --profile {self.profile}")
             return False
 
-        print("✅ Databricks CLI is ready")
+        print(f"✅ Databricks CLI is ready (profile: {self.profile})")
+        if self.workspace_url:
+            print(f"   Workspace: {self.workspace_url}")
+        if self.user_email:
+            print(f"   User: {self.user_email}")
         return True
 
     def get_workspace_info(self) -> bool:
@@ -240,7 +336,6 @@ class DatabricksDeployer:
                 secret.value = self.workspace_url or input(f"Enter {secret.description}: ").strip()
             elif secret.key == "session-secret":
                 # Generate a random session secret
-                import secrets
                 secret.value = secrets.token_urlsafe(32)
                 print(f"✅ Generated session secret: {secret.value[:16]}...")
             else:
@@ -260,7 +355,7 @@ class DatabricksDeployer:
             print(f"Adding {secret.key}...")
 
             exit_code, stdout, stderr = self.run_command([
-                "databricks", "secrets", "put",
+                "databricks", "secrets", "put-secret",
                 "--scope", scope_name,
                 "--key", secret.key,
                 "--string-value", secret.value
@@ -277,12 +372,14 @@ class DatabricksDeployer:
         """Build the React frontend"""
         print("🔨 Building React frontend...")
 
-        exit_code, stdout, stderr = self.run_command([
-            "sh", "-c", "cd frontend && npm run build"
-        ], capture_output=False)
+        # Check if frontend directory exists
+        if not os.path.exists(self.frontend_dir):
+            print(f"❌ Frontend directory not found: {self.frontend_dir}")
+            return False
 
-        if exit_code != 0:
-            print(f"❌ Frontend build failed")
+        # Run npm build
+        if not self.run_shell_command("npm run build", cwd=self.frontend_dir):
+            print("❌ Frontend build failed")
             return False
 
         print("✅ Frontend built successfully")
@@ -292,13 +389,16 @@ class DatabricksDeployer:
         """Copy built frontend to backend static directory"""
         print("📁 Copying static files...")
 
+        frontend_dist = os.path.join(self.frontend_dir, "dist")
+        backend_static = os.path.join(self.backend_dir, "static")
+
         # Remove existing static directory
-        if os.path.exists("backend/static"):
-            shutil.rmtree("backend/static")
+        if os.path.exists(backend_static):
+            shutil.rmtree(backend_static)
 
         # Copy dist to static
         try:
-            shutil.copytree("frontend/dist", "backend/static")
+            shutil.copytree(frontend_dist, backend_static)
             print("✅ Static files copied successfully")
             return True
         except Exception as e:
@@ -310,7 +410,7 @@ class DatabricksDeployer:
         print("📦 Packaging backend...")
 
         # Create build directory
-        build_dir = "backend/build"
+        build_dir = os.path.join(self.backend_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)
 
@@ -329,6 +429,7 @@ class DatabricksDeployer:
             "*.backup", "*.dbd_secrets",               # Backup/secret files
             "node_modules", ".git", ".gitignore",      # Dev files
             ".DS_Store", "Thumbs.db",                  # OS files
+            "app_temp.py",                             # Temp files
         ]
 
         def should_exclude(item):
@@ -338,42 +439,58 @@ class DatabricksDeployer:
                     return True
             return False
 
-        for item in os.listdir("backend"):
+        for item in os.listdir(self.backend_dir):
             if not should_exclude(item) and not item.startswith('.'):
-                src = os.path.join("backend", item)
+                src = os.path.join(self.backend_dir, item)
                 dst = os.path.join(build_dir, item)
                 if os.path.isdir(src):
                     shutil.copytree(src, dst)
                 else:
                     shutil.copy2(src, dst)
 
-        # Copy app.yaml from project root (if exists) or create minimal one
-        app_yaml_src = "app.yaml"
+        # Copy app.yaml from config file location
+        app_yaml_src = os.path.join(self.project_root, self.config_file)
+        if not os.path.exists(app_yaml_src):
+            app_yaml_src = os.path.join(self.backend_dir, self.config_file)
+
         app_yaml_dst = os.path.join(build_dir, "app.yaml")
 
         if os.path.exists(app_yaml_src):
-            print(f"Using app.yaml from project root")
-            shutil.copy2(app_yaml_src, app_yaml_dst)
+            print(f"📋 Using config: {app_yaml_src}")
+            # Copy but remove deployment section (not needed at runtime)
+            with open(app_yaml_src, 'r') as f:
+                config = yaml.safe_load(f)
+
+            # Remove deployment metadata (only used by this script)
+            if 'deployment' in config:
+                del config['deployment']
+
+            with open(app_yaml_dst, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
         else:
-            print(f"Creating minimal app.yaml")
+            print(f"⚠️  Config file not found: {app_yaml_src}")
+            print(f"   Creating minimal app.yaml")
             with open(app_yaml_dst, 'w') as f:
                 f.write('command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]\n')
                 f.write('\n')
                 f.write('env:\n')
-                f.write('  ENV: "production"\n')
-                f.write('  PORT: "8000"\n')
-                f.write('  DEBUG: "False"\n')
+                f.write('  - name: ENV\n')
+                f.write('    value: "production"\n')
+                f.write('  - name: PORT\n')
+                f.write('    value: "8000"\n')
 
         print("✅ Backend packaged successfully")
         return True
 
     def import_to_workspace(self) -> bool:
         """Import backend to Databricks workspace"""
-        print("📤 Importing to Databricks workspace...")
+        print(f"📤 Importing to Databricks workspace: {self.app_folder}")
+
+        build_dir = os.path.join(self.backend_dir, "build")
 
         exit_code, stdout, stderr = self.run_command([
             "databricks", "workspace", "import-dir",
-            "backend/build", self.app_folder, "--overwrite"
+            build_dir, self.app_folder, "--overwrite"
         ])
 
         if exit_code != 0:
@@ -385,7 +502,7 @@ class DatabricksDeployer:
 
     def deploy_app(self, scope_name: str = None) -> bool:
         """Deploy the app to Databricks"""
-        print("🚀 Deploying app to Databricks...")
+        print(f"🚀 Deploying app: {self.app_name}")
 
         # Create app if it doesn't exist
         exit_code, stdout, stderr = self.run_command([
@@ -393,9 +510,9 @@ class DatabricksDeployer:
         ])
 
         # Allow deploy to proceed if error is 'already exists' or 'maximum number of apps'
-        if exit_code != 0 and "already exists" not in stderr and "maximum number of apps" not in stderr:
-            print(f"❌ Failed to create app: {stderr}")
-            return False
+        if exit_code != 0 and "already exists" not in stderr.lower() and "maximum number of apps" not in stderr.lower():
+            print(f"⚠️  App creation returned: {stderr}")
+            # Continue anyway, app might already exist
 
         # Deploy the app
         exit_code, stdout, stderr = self.run_command([
@@ -452,7 +569,7 @@ class DatabricksDeployer:
             print(f"❌ Failed to delete app: {stderr}")
             return False
 
-    def hard_redeploy(self, scope_name: str = None) -> bool:
+    def hard_redeploy(self, skip_secrets: bool = True) -> bool:
         """Hard redeploy: delete existing app, wait for deletion, then redeploy"""
         print(f"🔥 Starting HARD REDEPLOY for app: {self.app_name}")
         print("=" * 60)
@@ -495,15 +612,13 @@ class DatabricksDeployer:
 
         # Step 4: Deploy the app
         print("\n🚀 Deploying fresh app...")
-        if not self.deploy_app(scope_name or ""):
+        if not self.deploy_app():
             return False
 
         # Step 5: Get app info
         self.get_app_info()
 
         print(f"\n🎉 HARD REDEPLOY completed successfully!")
-        if scope_name:
-            print(f"🔐 Secrets are stored in scope: {scope_name}")
 
         return True
 
@@ -533,7 +648,15 @@ class DatabricksDeployer:
             if app_url and app_url != 'N/A':
                 print(f"\n🌐 App URL: {app_url}")
             else:
-                print(f"\n🌐 App URL: {self.app_name} (URL not available)")
+                print(f"\n🌐 App URL: (URL not available yet)")
+
+            # Show service principal info if available
+            sp = app_info.get('service_principal', {})
+            if sp:
+                print(f"\n🔐 Service Principal:")
+                print(f"   ID: {sp.get('id', 'N/A')}")
+                print(f"   Application ID: {sp.get('application_id', 'N/A')}")
+                print(f"   Display Name: {sp.get('display_name', 'N/A')}")
 
             return True
         except json.JSONDecodeError:
@@ -545,27 +668,31 @@ class DatabricksDeployer:
         print("🧹 Cleaning up...")
 
         # Remove build directory
-        if os.path.exists("backend/build"):
-            shutil.rmtree("backend/build")
-
-        # Remove config file
-        if os.path.exists("app_env.json"):
-            os.remove("app_env.json")
+        build_dir = os.path.join(self.backend_dir, "build")
+        if os.path.exists(build_dir):
+            shutil.rmtree(build_dir)
 
         print("✅ Cleanup completed")
 
-    def deploy(self, hard_redeploy: bool = False):
+    def deploy(self, hard_redeploy: bool = False, skip_secrets: bool = False):
         """Main deployment workflow"""
-        print(f"🚀 Starting Databricks deployment\n{'='*60}")
+        print(f"\n{'='*60}")
+        print(f"🚀 Databricks App Deployment")
+        print(f"{'='*60}")
+        print(f"   App Name: {self.app_name}")
+        print(f"   Profile:  {self.profile}")
+        print(f"   Config:   {self.config_file}")
+        print(f"   Target:   {self.app_folder}")
+        print(f"{'='*60}\n")
 
         if not self.check_databricks_cli():
             self.cleanup()
             return False
 
-        # If hard redeploy is requested, skip scope configuration
+        # If hard redeploy is requested
         if hard_redeploy:
-            print("🔥 HARD REDEPLOY mode: Skipping scope configuration")
-            success = self.hard_redeploy()
+            print("🔥 HARD REDEPLOY mode: Will delete and recreate app")
+            success = self.hard_redeploy(skip_secrets)
             self.cleanup()
             return success
 
@@ -587,32 +714,56 @@ class DatabricksDeployer:
             return False
 
         self.get_app_info()
+
+        print(f"\n{'='*60}")
         print("🎉 Deployment completed successfully!")
+        print(f"{'='*60}")
+
         self.cleanup()
         return True
 
 def main():
-    parser = argparse.ArgumentParser(description="Deploy QueryForge AI app to Databricks")
-    parser.add_argument("--app-name", default="queryforge", help="App name")
-    parser.add_argument("--app-folder", default=None, help="App folder in workspace (auto-detected if not provided)")
-    parser.add_argument("--hard-redeploy", action="store_true", help="Hard redeploy: delete existing app, wait for deletion, then redeploy")
+    parser = argparse.ArgumentParser(
+        description="Deploy QueryForge AI app to Databricks",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Deploy using app.yaml config
+  python deploy_to_databricks.py --skip-secrets
+
+  # Deploy to production
+  python deploy_to_databricks.py --config app.yaml.prod --skip-secrets
+
+  # Deploy with custom app name
+  python deploy_to_databricks.py --app-name my-app --profile my-profile --skip-secrets
+
+  # Hard redeploy (delete and recreate)
+  python deploy_to_databricks.py --hard-redeploy --skip-secrets
+
+Priority for app_name (highest to lowest):
+  1. --app-name CLI argument
+  2. DATABRICKS_APP_NAME environment variable
+  3. deployment.app_name in app.yaml
+        """
+    )
+    parser.add_argument("--app-name", help="App name (overrides app.yaml)")
+    parser.add_argument("--profile", help="Databricks CLI profile (overrides app.yaml)")
+    parser.add_argument("--config", default="app.yaml", help="Config file to use (default: app.yaml)")
+    parser.add_argument("--hard-redeploy", action="store_true", help="Delete existing app and redeploy")
+    parser.add_argument("--skip-secrets", action="store_true", help="Skip secrets setup (use for redeployments)")
 
     args = parser.parse_args()
 
-    deployer = DatabricksDeployer()
-    deployer.app_name = args.app_name
+    deployer = DatabricksDeployer(
+        profile=args.profile,
+        app_name=args.app_name,
+        config_file=args.config
+    )
 
-    # Update app_folder if provided, otherwise use auto-detected path with new app_name
-    if args.app_folder:
-        deployer.app_folder = args.app_folder
-    elif deployer.user_email:
-        deployer.app_folder = f"/Workspace/Users/{deployer.user_email}/{args.app_name}"
-    else:
-        deployer.app_folder = f"/Workspace/Users/YOUR_USER@example.com/{args.app_name}"
-
-    print(f"📍 App will be deployed to: {deployer.app_folder}")
-
-    success = deployer.deploy(hard_redeploy=args.hard_redeploy)
+    success = deployer.deploy(
+        hard_redeploy=args.hard_redeploy,
+        skip_secrets=args.skip_secrets
+    )
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
